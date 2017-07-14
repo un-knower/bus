@@ -14,7 +14,8 @@ class TaxiFunc(taxiDataCleanUtils: TaxiDataCleanUtils) extends Serializable {
 
   /**
     * 出租车OD：/parastor/backup/datum/taxi/od/
-    *
+    * 时间都是ISO格式
+    * 广播版,缺点：循环多，耗时长，优点：耗内存少
     * @param taxiDealClean
     */
   def OD(taxiDealClean: Broadcast[Array[Row]]): DataFrame = {
@@ -24,8 +25,8 @@ class TaxiFunc(taxiDataCleanUtils: TaxiDataCleanUtils) extends Serializable {
       row.getString(row.fieldIndex("carId")) + "," + split(0)
     }).flatMapGroups((s, it) => {
       var deal = taxiDealClean.value.filter(row => row.getString(row.fieldIndex("carId")).equals(s.split(",")(0))).map { row =>
-        val timeDif = dealTime(row.getString(row.fieldIndex("upTime")),row.getString(row.fieldIndex("downTime")))
-        TaxiOD(row.getString(row.fieldIndex("carId")), row.getString(row.fieldIndex("upTime")), "null", Double.MaxValue, 0.0, 0.0, row.getString(row.fieldIndex("downTime")), "null", Double.MaxValue, 0.0, 0.0, 0.0, 0.0, timeDif)
+        val timeDif = dealTime(row.getString(row.fieldIndex("upTime")), row.getString(row.fieldIndex("downTime")))
+        TaxiOD(row.getString(row.fieldIndex("carId")), row.getString(row.fieldIndex("upTime")), "null", Double.MaxValue, 0.0, 0.0, row.getString(row.fieldIndex("downTime")), "null", Double.MaxValue, 0.0, 0.0, 0.0, 0.0, timeDif,row.getString(row.fieldIndex("color")))
       }
       it.toArray.sortBy(row => row.getString(row.fieldIndex("time"))).foreach(row => {
         val time = row.getString(row.fieldIndex("time"))
@@ -59,6 +60,17 @@ class TaxiFunc(taxiDataCleanUtils: TaxiDataCleanUtils) extends Serializable {
       })
       deal
     }).filter(od => od.distance > 300.0 && od.upDif < 30.0 && od.downDif < 30.0).toDF()
+  }
+
+  /**
+    * 出租车OD：/parastor/backup/datum/taxi/od/
+    * 时间都是ISO格式
+    * join版
+    * @param taxiDealClean
+    */
+  def OD(taxiDealClean: DataFrame): DataFrame = {
+    //1.按车牌进行groupBy 2.根据time由小到大进行排序 3.将相连两条记录组合 4.过滤上、下车经纬度不全的数据 5.过滤距离小于300米的数据
+    taxiDataCleanUtils.data
   }
 
   /**
@@ -113,9 +125,12 @@ class TaxiFunc(taxiDataCleanUtils: TaxiDataCleanUtils) extends Serializable {
   * @param downLon      下车经度
   * @param downLat      下车纬度
   * @param distance     距离
+  * @param speed        速度
+  * @param timeDif      时间差
+  * @param color        车颜色
   */
 case class TaxiOD(carId: String, upTime: String, upTimePlus: String, upDif: Double, upLon: Double, upLat: Double, downTime: String,
-                  downTimePlus: String, downDif: Double, downLon: Double, downLat: Double, distance: Double, speed: Double, timeDif: Double)
+                  downTimePlus: String, downDif: Double, downLon: Double, downLat: Double, distance: Double, speed: Double, timeDif: Double, color: String)
 
 object TaxiFunc {
   def apply(taxiDataCleanUtils: TaxiDataCleanUtils): TaxiFunc = new TaxiFunc(taxiDataCleanUtils)
