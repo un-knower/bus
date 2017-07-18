@@ -2,6 +2,7 @@ package cn.sibat.bus
 
 import java.text.SimpleDateFormat
 
+import cn.sibat.bus.utils.LocationUtil
 import org.apache.spark.sql.{DataFrame, Dataset}
 import org.apache.spark.sql.functions._
 
@@ -13,7 +14,7 @@ import scala.collection.mutable.ArrayBuffer
   * 应用不同场景，进行条件组合
   * Created by kong on 2017/4/10.
   */
-class BusDataCleanUtils(val data: DataFrame) extends Serializable{
+class BusDataCleanUtils(val data: DataFrame) extends Serializable {
 
   import this.data.sparkSession.implicits._
 
@@ -56,6 +57,7 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable{
     * 使用 @link{ cn.sibat.bus.BusDataCleanUtils.zeroPoint() }
     * 对于不符合条件的数据用返回None替代null，null在序列化的时候会出错，过滤的时候可以识别为null
     * 同时Row类型也不能序列化转化，不要用row做返回
+    *
     * @return
     */
   def allZeroPoint(): BusDataCleanUtils = {
@@ -156,6 +158,87 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable{
     }).toDF("sysTime", "dataType", "term", "carId", "route", "subRoute", "company", "status", "lon"
       , "lat", "high", "upTime", "speed", "direct", "carSpeed", "mileage", "interval", "movement")
     newUtils(target)
+  }
+
+  /**
+    * 统一日期格式ISO：yyyy-MM-dd'T'HH:mm:ss:SSS'Z'
+    * 用户自己指定原文件格式
+    *
+    * @param sysTimeFormat 系统时间格式
+    * @param upTimeFormat  上传时间格式
+    * @return
+    */
+  def dateFormat(sysTimeFormat: String, upTimeFormat: String): BusDataCleanUtils = {
+    val sysSdf = new SimpleDateFormat(sysTimeFormat)
+    val upSdf = new SimpleDateFormat(upTimeFormat)
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val sys2ISO = udf((sysTime: String) => {
+      try {
+        targetSdf.format(sysSdf.parse(sysTime))
+      } catch {
+        case e: Exception => "errorDate"
+      }
+    })
+
+    val up2ISO = udf((upTime: String) => {
+      try {
+        targetSdf.format(upSdf.parse(upTime))
+      } catch {
+        case e: Exception => "errorDate"
+      }
+    })
+
+    newUtils(this.data.withColumn("sysTime", sys2ISO(col("sysTime"))).withColumn("upTime", up2ISO(col("upTime"))))
+  }
+
+  /**
+    * 统一日期格式ISO：yyyy-MM-dd'T'HH:mm:ss:SSS'Z'
+    * 用户自己指定原文件格式,系统时间的格式与上传时间格式一致
+    *
+    * @param timeFormat 上传时间格式
+    * @return
+    */
+  def upTimeFormat(timeFormat: String): BusDataCleanUtils = {
+    val sdf = new SimpleDateFormat(timeFormat)
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val time2ISO = udf((upTime: String) => {
+      try {
+        targetSdf.format(sdf.parse(upTime))
+      } catch {
+        case e: Exception => "errorDate"
+      }
+    })
+    newUtils(this.data.withColumn("upTime", time2ISO(col("upTime"))))
+  }
+
+  /**
+    * 统一日期格式ISO：yyyy-MM-dd'T'HH:mm:ss:SSS'Z'
+    * 用户自己指定原文件格式,系统时间的格式与上传时间格式一致
+    *
+    * @param timeFormat 系统时间格式
+    * @return
+    */
+  def sysTimeFormat(timeFormat: String): BusDataCleanUtils = {
+    val sdf = new SimpleDateFormat(timeFormat)
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val time2ISO = udf((sysTime: String) => {
+      try {
+        targetSdf.format(sdf.parse(sysTime))
+      } catch {
+        case e: Exception => "errorDate"
+      }
+    })
+    newUtils(this.data.withColumn("sysTime", time2ISO(col("sysTime"))))
+  }
+
+  /**
+    * 过滤时间格式异常的数据
+    * 经过时间格式化之后的异常数据
+    *
+    * @return
+    */
+  def filterErrorDate(): BusDataCleanUtils = {
+    newUtils(this.data.filter(col("upTime") =!= "errorDate"))
   }
 
   /**

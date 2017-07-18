@@ -9,6 +9,7 @@ import org.apache.hadoop.mapreduce.lib.input.FileSplit
 import org.apache.hadoop.mapreduce.{InputSplit, RecordReader, TaskAttemptContext}
 
 /**
+  * zip文件的读取程序
   * Created by kong on 2017/7/3.
   */
 class ZipFileRecordReader extends RecordReader[Text, BytesWritable] {
@@ -19,12 +20,23 @@ class ZipFileRecordReader extends RecordReader[Text, BytesWritable] {
   private var currentValue: BytesWritable = null
   private var isFinished: Boolean = false
 
+  /**
+    * 获取当前的处理状态
+    * 1解压完成
+    * 0正在解压
+    * @return
+    */
   override def getProgress: Float = if (isFinished) 1 else 0
 
+  /**
+    * 处理压缩文件中的每一个文件
+    * @return
+    */
   override def nextKeyValue(): Boolean = {
     var result = true
     var entry: ZipEntry = null
     try {
+      //获取文件实体，title+content
       entry = zip.getNextEntry
     } catch {
       case e: Exception => if (!ZipFileInputFormat.apply.isLenient) throw e
@@ -35,8 +47,10 @@ class ZipFileRecordReader extends RecordReader[Text, BytesWritable] {
       return false
     }
 
+    //文件名作为key
     currentKey = new Text(entry.getName)
 
+    //把内容读成字节流
     val bos = new ByteArrayOutputStream()
     val byte = new Array[Byte](8192)
     var temp = true
@@ -63,8 +77,17 @@ class ZipFileRecordReader extends RecordReader[Text, BytesWritable] {
     result
   }
 
+  /**
+    * 压缩文件的内容
+    * @return
+    */
   override def getCurrentValue: BytesWritable = currentValue
 
+  /**
+    * 初始化程序
+    * @param split inputSplit
+    * @param context taskContext
+    */
   override def initialize(split: InputSplit, context: TaskAttemptContext): Unit = {
     val fileSplit = split.asInstanceOf[FileSplit]
     val conf = context.getConfiguration

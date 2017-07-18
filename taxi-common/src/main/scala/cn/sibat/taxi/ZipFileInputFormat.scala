@@ -5,6 +5,7 @@ import org.apache.hadoop.mapreduce.{InputSplit, RecordReader, TaskAttemptContext
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 
 /**
+  * zip格式工具转成文件名+内容的一个tuple
   * Created by kong on 2017/7/3.
   */
 class ZipFileInputFormat extends FileInputFormat[Text,BytesWritable]{

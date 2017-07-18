@@ -97,7 +97,7 @@ object ReadTaxiGPSToHDFS {
 
     ///user/kongshaohong/taxiFile/
     //D:/testData/公交处/data/
-//    val zipFile = spark.sparkContext.newAPIHadoopFile("/user/kongshaohong/taxiFile/track_"+argDate+".zip",classOf[ZipFileInputFormat],classOf[Text],classOf[BytesWritable])
+    val zipFile = spark.sparkContext.newAPIHadoopFile("/user/kongshaohong/taxiFile/track_"+argDate+".zip",classOf[ZipFileInputFormat],classOf[Text],classOf[BytesWritable])
 
 //    val zipPath = formatDate.replaceAll("-","/")
 //    val zipFile1 = spark.sparkContext.wholeTextFiles("D:/testData/公交处/data/track/"+zipPath)
@@ -132,46 +132,44 @@ object ReadTaxiGPSToHDFS {
 //      })
 //    }).toDF
 
-//    val taxiDF = zipFile.filter(t=>{
-//      val split = URLDecoder.decode(t._1.toString,"GBK").split("_")
-//      val carId = split(split.length-1).replace(".txt","")
-//      var result = false
-//      bTaxiDeal.value.foreach(row => {
-//        if(row.getString(row.fieldIndex("carId")).equals(carId))
-//          result = true
-//      })
-//      result
-//    }).flatMap(tuple=>{
-//      val split = URLDecoder.decode(tuple._1.toString,"GBK").split("_")
-//      val carId = split(split.length-1).replace(".txt","")
-//      val sdf = new SimpleDateFormat("yyyyMMdd/HHmmss")
-//      val sdf1 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-//      val content = new java.lang.String(tuple._2.getBytes)
-//      content.split("\n").map(s=> {
-//        try {
-//          val split = s.replaceAll("::", ":null:").split(":")
-//          val time = sdf1.format(sdf.parse(split(2)))
-//          val cars = bCarStaticDate.value.filter(ts => ts.carId.equals(carId.trim))
-//          var color = "红色"
-//          var company = "null"
-//          if (cars.length > 0) {
-//            color = cars(0).color
-//            company = cars(0).company
-//          }
-//          //车牌号，经度，纬度，上传时间，设备号，速度，方向，定位状态，未知，SIM卡号，车辆状态，车辆颜色
-//          TaxiData(carId, split(7).toDouble / 600000, split(8).toDouble / 600000, time, company, split(3), split(4), split(12), split(10), split(13), split(5), color)
-//        }catch {
-//          case e:Exception => TaxiData("1", 1.0, 1.0, "1", "1", "1", "1", "1", "1", "1", "1", "1")
-//        }
-//      }).filter(td => !td.carId.equals("1"))
-//    }).toDF
+    val taxiDF = zipFile.filter(t=>{
+      val split = URLDecoder.decode(t._1.toString,"GBK").split("_")
+      val carId = split(split.length-1).replace(".txt","")
+      var result = false
+      bTaxiDeal.value.foreach(row => {
+        if(row.getString(row.fieldIndex("carId")).equals(carId))
+          result = true
+      })
+      result
+    }).flatMap(tuple=>{
+      val split = URLDecoder.decode(tuple._1.toString,"GBK").split("_")
+      val carId = split(split.length-1).replace(".txt","")
+      val sdf = new SimpleDateFormat("yyyyMMdd/HHmmss")
+      val sdf1 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+      val content = new java.lang.String(tuple._2.getBytes)
+      content.split("\n").map(s=> {
+        try {
+          val split = s.replaceAll("::", ":null:").split(":")
+          val time = sdf1.format(sdf.parse(split(2)))
+          val color = split(1) match {
+            case "0" => "红的"
+            case "1" => "绿的"
+            case "2" => "蓝的"
+          }
+          //车牌号，经度，纬度，上传时间，设备号，速度，方向，定位状态，未知，SIM卡号，车辆状态，车辆颜色
+          TaxiData(carId, split(7).toDouble / 600000, split(8).toDouble / 600000, time, color, split(3), split(4), split(12), split(10), split(13), split(5), color)
+        }catch {
+          case e:Exception => TaxiData("1", 1.0, 1.0, "1", "1", "1", "1", "1", "1", "1", "1", "1")
+        }
+      }).filter(td => !td.carId.equals("1"))
+    }).toDF
 
     ///user/kongshaohong/taxiGPS/
     //D:/testData/公交处/taxiGPS/
 //    taxiDF.write.parquet("/user/kongshaohong/taxiGPS/"+argDate)
     //taxiDF1.write.parquet("D:/testData/公交处/taxiGPS/"+argDate)
 
-    val taxiDF = spark.read.parquet("/user/kongshaohong/taxiGPS1/"+argDate)
+    //val taxiDF = spark.read.parquet("/user/kongshaohong/taxiGPS1/"+argDate)
 
     val taxiFunc = new TaxiFunc(TaxiDataCleanUtils.apply(taxiDF))
     taxiFunc.OD(bTaxiDeal).rdd.saveAsTextFile("/user/kongshaohong/taxiOD/" + argDate)

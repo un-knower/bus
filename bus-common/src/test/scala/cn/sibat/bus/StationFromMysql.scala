@@ -14,15 +14,15 @@ import scala.collection.mutable.ArrayBuffer
 object StationFromMysql {
   def main(args: Array[String]) {
     val spark = SparkSession.builder().config("spark.sql.warehouse.dir", "file:///c:/path/to/my").appName("DirectNULLToPredict").master("local[*]").getOrCreate()
-    val url = ""
+    val url = "jdbc:mysql://210.75.252.138:4522/xbus_v2?user=xbpeng&password=xbpeng"
+    //val url = "jdbc:mysql://192.168.40.27:3306/xbus?user=test&password=test"
     val prop = new Properties()
     val lineDF = spark.read.jdbc(url, "line", prop)
-    val lineStopDF = spark.read.jdbc(url, "line_stop", prop)
-    val stationDF = spark.read.jdbc(url, "station", prop)
+    val lineStopDF = spark.read.jdbc(url, "line_checkpoint", prop)
     lineDF.createOrReplaceTempView("line")
-    lineStopDF.createOrReplaceTempView("line_stop")
-    stationDF.createOrReplaceTempView("station")
-    val sql = "select l.ref_id,l.direction,s.station_id,ss.name,s.stop_order,ss.lat,ss.lon from line l,line_stop s,station ss where l.id=s.line_id AND s.station_id=ss.id order by l.ref_id,l.direction,s.stop_order"
-    spark.sql(sql).show()
+    lineStopDF.createOrReplaceTempView("line_checkpoint")
+    val sql = "select l.ref_id,l.direction,c.lon,c.lat,c.point_order from line l,line_checkpoint c where l.id=c.line_id order by l.ref_id,l.direction,c.point_order"
+    val checkPoint = spark.sql(sql)
+    checkPoint.write.parquet("D:/testData/公交处/checkpointV2")
   }
 }
