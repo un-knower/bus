@@ -1,5 +1,7 @@
 package cn.sibat.bus
 
+import java.util.UUID
+
 import cn.sibat.bus.utils.LocationUtil
 import org.apache.spark.sql.{Row, SparkSession}
 
@@ -62,6 +64,7 @@ object TestBus {
 
 
   def main(args: Array[String]): Unit = {
-
+    val l = 1
+    println(UUID.randomUUID().toString, "0" * (3-l.toString.length) + l)
   }
 }

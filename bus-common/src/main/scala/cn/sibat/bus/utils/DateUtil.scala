@@ -14,10 +14,10 @@ object DateUtil {
       * @return 时间差
       */
     def dealTime(firstTime: String, lastTime: String): Double = {
-      var result = -1L
+      var result = -1.0
       try {
         val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-        result = (sdf.parse(lastTime).getTime - sdf.parse(firstTime).getTime) /1000
+        result = (sdf.parse(lastTime).getTime - sdf.parse(firstTime).getTime).toDouble /1000
       }catch {
         case e:Exception => e.printStackTrace()
       }
