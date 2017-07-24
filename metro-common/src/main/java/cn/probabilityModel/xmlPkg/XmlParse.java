@@ -1,12 +1,16 @@
-package cn.probabilityModel;
+package cn.probabilityModel.xmlPkg;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.DocumentBuilder;
 
+import org.apache.derby.iapi.types.XML;
 import org.w3c.dom.*;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
+
+import cn.ODBackModel.utils.NoNameExUtil;
 
 /**
  * 解析输入的xml文件
@@ -15,59 +19,59 @@ import java.util.*;
  */
 public class XmlParse {
     //站点基本信息
-    public static Integer stationCount; //118
-    public static Integer transStation; //13
-    public static Integer repeatAllStaitonCount; //131
-    public static Integer adjacStaitonCount; //252
-    public static Integer lineCount; //5
-    public static Integer transLimitCount; //2
+    private static Integer stationCount; //118
+    private static Integer transStation; //13
+    private static Integer repeatAllStaitonCount; //131
+    private static Integer adjacStaitonCount; //252
+    private static Integer lineCount; //5
+    private static Integer transLimitCount; //2
 
     //站点发车间隔,有几条线路就有几个元素
-    public static List<Double> TrainInterval = new ArrayList<>();
+    private static List<Double> TrainInterval = new ArrayList<>();
     //列车发车速度
-    public static List<Double> Speed = new ArrayList<>();
+    private static List<Double> Speed = new ArrayList<>();
     //线路编码
-    public static List<String> LineNoName = new ArrayList<>();
+    private static List<String> LineNoName = new ArrayList<>();
 
     //中距离时间被限制在60分钟以内
-    public static double MiddleTravelLimit;
+    private static int MiddleTravelLimit;
     //短距离时间被限制在30分钟以内
-    public static double ShortTravelLimit;
+    private static int ShortTravelLimit;
     //长距离有效路径能够增加的时间为15分钟
-    public static double LongAddLimit;
+    private static int LongAddLimit;
     //中距离有效路径能够增加的时间为10分钟
-    public static double MiddleAddLimit;
+    private static int MiddleAddLimit;
     //短距离有效路径能够增加的时间为10分钟
-    public static double ShortAddLimit;
+    private static int ShortAddLimit;
 
     //正态模型参数
-    public static double ShortTransPara;  //对应正态分布模型短途平峰时段的换乘时间放大系数3.390000
-    public static double ShortSumPara;  //对应正态分布模型短途平峰时段的总出行时间的放大系数3.170000
-    public static double ShortNormalPara;    //对应正态分布模型短途平峰时段的标准差系数12.610000
-    public static double MiddleTransPara; //对应正态分布模型中途平峰时段的换乘时间放大系数3.850000
-    public static double MiddleSumPara; //对应正态分布模型中途平峰时段的总出行时间的放大系数1.170000
-    public static double MiddleNormalPara;   //对应正态分布模型中途平峰时段的标准差系数3.010000
-    public static double LongTransPara;   //对应正态分布模型长途平峰时段的换乘时间放大系数2.450000
-    public static double LongSumPara;   //对应正态分布模型长途平峰时段的总出行时间的放大系数1.920000
-    public static double LongNormalPara;     //对应正态分布模型长途平峰时段的标准差系数7.050000
+    private static double ShortTransPara;  //对应正态分布模型短途平峰时段的换乘时间放大系数3.390000
+    private static double ShortSumPara;  //对应正态分布模型短途平峰时段的总出行时间的放大系数3.170000
+    private static double ShortNormalPara;    //对应正态分布模型短途平峰时段的标准差系数12.610000
+    private static double MiddleTransPara; //对应正态分布模型中途平峰时段的换乘时间放大系数3.850000
+    private static double MiddleSumPara; //对应正态分布模型中途平峰时段的总出行时间的放大系数1.170000
+    private static double MiddleNormalPara;   //对应正态分布模型中途平峰时段的标准差系数3.010000
+    private static double LongTransPara;   //对应正态分布模型长途平峰时段的换乘时间放大系数2.450000
+    private static double LongSumPara;   //对应正态分布模型长途平峰时段的总出行时间的放大系数1.920000
+    private static double LongNormalPara;     //对应正态分布模型长途平峰时段的标准差系数7.050000
 
     //站点邻接信息，key-value对应于子节点detail的属性信息
-    public static List<HashMap<String, String>> StationConnectInfor = new ArrayList<>();
+    private static List<HashMap<String, String>> StationConnectInfor = new ArrayList<>();
     //换乘站步行时间
-    public static List<Map<String, String>> TransStationWalkTime = new ArrayList<>();
+    private static List<HashMap<String, String>> TransStationWalkTime = new ArrayList<>();
     //OD点票价
-    public static List<Map<String, String>> ODPrice = new ArrayList<>();
+    private static List<HashMap<String, String>> ODPrice = new ArrayList<>();
     //换乘站点所属线路
-    public static List<Map<String, String>> TransStationBelongLine = new ArrayList<>();
+    private static List<HashMap<String, String>> TransStationBelongLine = new ArrayList<>();
 
     /**
      * 读取XML文件
      */
-    public static void readXmlFile() {
+    public static void readXmlFile() throws IOException{
 
         try {
 
-            File file = new File("E:\\bus\\metro-common\\src\\main\\resources\\轨道交通路网信息.xml");
+            File file = new File("E:\\trafficDataAnalysis\\probabilityModel\\导出的xml文件\\工作日-平峰-20160623.xml");
 
             DocumentBuilder dBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
 
@@ -157,22 +161,22 @@ public class XmlParse {
                                             case "PathTimeSeparetor":
                                                 switch (attrName) {
                                                     case "MiddleTravelLimit":
-                                                        MiddleTravelLimit = Double.parseDouble(attrValue);
+                                                        MiddleTravelLimit = Integer.parseInt(attrValue);
                                                         break;
                                                     case "ShortTravelLimit":
-                                                        ShortTravelLimit = Double.parseDouble(attrValue);
+                                                        ShortTravelLimit = Integer.parseInt(attrValue);
                                                         break;
                                                 }
                                             case "PathAddTimeSeparetor":
                                                 switch (attrName) {
                                                     case "LongAddLimit":
-                                                        LongAddLimit = Double.parseDouble(attrValue);
+                                                        LongAddLimit = Integer.parseInt(attrValue);
                                                         break;
                                                     case "MiddleAddLimit":
-                                                        MiddleAddLimit = Double.parseDouble(attrValue);
+                                                        MiddleAddLimit = Integer.parseInt(attrValue);
                                                         break;
                                                     case "ShortAddLimit":
-                                                        ShortAddLimit = Double.parseDouble(attrValue);
+                                                        ShortAddLimit = Integer.parseInt(attrValue);
                                                 }
                                             default:
                                                 break;
@@ -267,6 +271,12 @@ public class XmlParse {
                                                     case "StatStopTime2":
                                                         StationConnectInforHashmap.put(attrName, attrValue);
                                                         break;
+                                                    case "RunningTime1":
+                                                        StationConnectInforHashmap.put(attrName, attrValue);
+                                                        break;
+                                                    case "RunningTime2":
+                                                        StationConnectInforHashmap.put(attrName, attrValue);
+                                                        break;
                                                 }
                                             default:
                                                 break;
@@ -355,27 +365,47 @@ public class XmlParse {
         }
     }
 
+    public static XmlParse xmlParse; //实例化对象
+    static  {
+        xmlParse = new XmlParse();
+        try {
+            readXmlFile();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static List<HashMap<String, String>> getStationConnectInfor() {
+        return StationConnectInfor;
+    }
+
+    public static Integer getStationCount() {
+        return stationCount;
+    }
+
     /**
      * 测试函数
      * @param args 参数
      */
     public static void main(String args[]) {
-        readXmlFile();
-        for (Map.Entry<String, String> map: StationConnectInfor.get(0).entrySet()) {
-            System.out.println(map.getKey() + ":"  + map.getValue());
-        }
-        System.out.println();
-        for (Map.Entry<String, String> map: TransStationWalkTime.get(0).entrySet()) {
-            System.out.println(map.getKey() + ":"  + map.getValue());
-        }
-        System.out.println();
-        for (Map.Entry<String, String> map: ODPrice.get(0).entrySet()) {
-            System.out.println(map.getKey() + ":"  + map.getValue());
-        }
-        System.out.println();
-        for (Map.Entry<String, String> map: TransStationBelongLine.get(0).entrySet()) {
-            System.out.println(map.getKey() + ":"  + map.getValue());
-        }
-        System.out.println();
+//        readXmlFile();
+//        for (Map.Entry<String, String> map: StationConnectInfor.get(0).entrySet()) {
+//            System.out.println(map.getKey() + ":"  + map.getValue());
+//        }
+//        System.out.println();
+//        for (Map.Entry<String, String> map: TransStationWalkTime.get(0).entrySet()) {
+//            System.out.println(map.getKey() + ":"  + map.getValue());
+//        }
+//        System.out.println();
+////        for (Map.Entry<String, String> map: ODPrice.get(0).entrySet()) {
+////            System.out.println(map.getKey() + ":"  + map.getValue());
+////        }
+//        System.out.println();
+//        for (Map.Entry<String, String> map: TransStationBelongLine.get(0).entrySet()) {
+//            System.out.println(map.getKey() + ":"  + map.getValue());
+//        }
+//        getStationConnectInfor();
+
+        System.out.println(NoNameExUtil.NO2Name(getStationConnectInfor().get(0).get("StatNo")));
     }
 }

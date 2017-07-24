@@ -1,7 +1,7 @@
 package cn.sibat.createGraph;
 
 /**
- * This class models an undirected Edge in the Graph
+ * This class models an directed Edge in the Graph
  * Created by wing1995 on 2017/6/28.
  */
 public class Edge implements Comparable<Edge>{
@@ -9,36 +9,27 @@ public class Edge implements Comparable<Edge>{
     private int weight;
 
     /**
-     *
-     * @param one The first vertex in the Edge
-     * @param two The second vertex in the Edge
-     */
-    public Edge(Vertex one, Vertex two) {
-        this(one, two, 1);
-    }
-
-    /**
-     *
+     * 有向加权图
      * @param one The first vertex in the Edge
      * @param two The second vertex of the Edge
      * @param weight The weight of this Edge
      */
     public Edge(Vertex one, Vertex two, int weight) {
-        this.one = (one.getLabel().compareTo(two.getLabel()) <= 0) ? one : two;
-        this.two = (this.one == one) ? two : one;
+        this.one = one;
+        this.two = two;
         this.weight = weight;
     }
 
     /**
-     *
+     * 只返回下一节点
      * @param current current edge
      * @return The neighbor of current along this edge
      */
     public Vertex getNeighbor(Vertex current) {
-        if(!(current.equals(one) || current.equals(two))) {
+        if(!(current.equals(one))) {
             return null;
         }
-        return (current.equals(one)) ? two : one;
+        return two;
     }
 
     /**
@@ -67,14 +58,6 @@ public class Edge implements Comparable<Edge>{
 
     /**
      *
-     * @param weight The new weight of this Edge
-     */
-    public void setWeight(int weight){
-        this.weight = weight;
-    }
-
-    /**
-     *
      * @param other The Edge to compare against this Edge
      * @return int this.weight - other.weight
      */
@@ -87,12 +70,12 @@ public class Edge implements Comparable<Edge>{
      * @return String A String representation of the Edge
      */
     public String toString() {
-        return "({" + one +  ", " + two + "}, " + weight + "})";
+        return "\n从" + one +  "到" + two + "耗时" + weight + "秒";
     }
 
     /**
      *
-     * @return int The hash code for this Edge
+     * @return int The hash mainPkg for this Edge
      */
     public int hashCode(){
         return (one.getLabel() + two.getLabel()).hashCode();

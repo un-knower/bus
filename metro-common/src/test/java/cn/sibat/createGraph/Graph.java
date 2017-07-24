@@ -28,11 +28,8 @@ public class Graph {
         }
     }
 
-    public boolean addEdge(Vertex one, Vertex two){
-        return addEdge(one, two, 1);
-    }
-
-    private boolean addEdge(Vertex one, Vertex two, int weight){
+    public boolean addEdge(Vertex one, Vertex two, int weight){
+        //无环
         if(one.equals(two)) {
             return false;
         }
@@ -44,13 +41,12 @@ public class Graph {
         }
 
         //and that the Edge isn't already incident to one of the vertexes
-        else if(one.containsNeighbor(e) || two.containsNeighbor(e)) {
+        else if(one.containsNeighbor(e)) {
             return false;
         }
-
+        //只给第一个节点添加邻居
         edges.put(e.hashCode(), e);
         one.addNeighbor(e);
-        two.addNeighbor(e);
         return true;
     }
 
@@ -75,32 +71,17 @@ public class Graph {
         return vertices.get(label);
     }
 
-    public boolean addVertex(Vertex vertex, boolean overwritingExisting){
-        Vertex current = this.vertices.get(vertex.getLabel());
-        if(current != null){
-            if(!overwritingExisting){
-                return false;
-            }
-            while (current.getNeighborCount() > 0){
-                this.removeEdge(current.getNeighbor(0));
-            }
-        }
+    public boolean addVertex(Vertex vertex){
         vertices.put(vertex.getLabel(), vertex);
         return true;
-    }
-
-    public Vertex removeVertex(String label){
-        Vertex v = vertices.remove(label);
-        while(v.getNeighborCount() > 0){
-            this.removeEdge(v.getNeighbor(0));
-        }
-        return v;
     }
 
     public Set<String> vertexKeys(){
         return this.vertices.keySet();
     }
+
     public Set<Edge> getEdges(){
         return new HashSet<Edge>(this.edges.values());
     }
+
 }

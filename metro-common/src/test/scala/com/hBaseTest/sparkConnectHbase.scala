@@ -101,7 +101,7 @@ object sparkConnectHBaseTest {
         val gpsTimestamp = TimeUtils.apply.time2stamp(gpsTimeStr, "yyyy-MM-dd HH:mm:ss")
         val gps_lng = arr(8).toFloat
         val gps_lat = arr(9).toFloat
-        isCheckedFlag = sparkConnectHbase.apply().checkValidTime(HBASE_TABLE_TODAY, gpsTimestamp.toInt) || sparkConnectHbase.apply().checkValidGPS(gps_lat, gps_lng)
+        isCheckedFlag = sparkConnectHbase.apply().checkValidTime(HBASE_TABLE_TODAY, gpsTimestamp.toInt) && sparkConnectHbase.apply().checkValidGPS(gps_lat, gps_lng)
       } catch {
         case e: ArrayIndexOutOfBoundsException => println("This row contains missing value!")
         case _ => println("Unexpected error happened!")

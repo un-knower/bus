@@ -50,15 +50,6 @@ public class Vertex {
 
     /**
      *
-     * @param index The index of to the edge to remove from this.neighbor
-     * @return Edge The removed Edge
-     */
-    public Edge removeNeighbor(int index) {
-        return this.neighborhood.remove(index);
-    }
-
-    /**
-     *
      * @param edge The edge to remove from this.neighborhood
      */
     public void removeNeighbor(Edge edge) {
@@ -86,7 +77,7 @@ public class Vertex {
      * @return String A String representation of this vertex
      */
     public String toString() {
-        return "Vertex " + label;
+        return "站点" + label;
     }
 
     /**
