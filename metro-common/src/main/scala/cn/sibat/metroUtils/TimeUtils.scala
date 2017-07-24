@@ -75,7 +75,7 @@ object TimeUtils {
   //测试返回的是北京时间
   def main(args: Array[String]): Unit = {
     val timeUtils = new TimeUtils
-    val dayDate = timeUtils.date2Stamp(timeUtils.time2Date("2017-01-01", "yyyy-MM-dd"))
+    val dayDate = timeUtils.date2Stamp(timeUtils.time2Date("2017-01-02", "yyyy-MM-dd"))
     val hourDate = timeUtils.date2Stamp(timeUtils.time2Date("06:43:00", "HH:mm:ss"))
     val newDayDate = dayDate + hourDate
     println(dayDate)

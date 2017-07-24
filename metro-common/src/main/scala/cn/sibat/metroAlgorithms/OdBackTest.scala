@@ -1,7 +1,7 @@
 package cn.sibat.metroAlgorithms
 
+import cn.ODBackModel.mainPkg.MainThread
 import org.apache.spark.sql.SparkSession
-import huzhen.code.MainThread
 import org.apache.spark.{SparkConf, SparkContext}
 
 /**
