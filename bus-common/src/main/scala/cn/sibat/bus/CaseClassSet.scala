@@ -71,6 +71,27 @@ case class TripVisualization(index:Int,tripId:Int,frechetDistance:Double)
 case class BusArrivalForVisual(carId:String, lon:Double, lat:Double, route:String, direct:String, upTime:String, tripId:Int)
 
 /**
+  * 公交到站HBase存储数据格式
+  * 表名 ARRLEA_Q_+日期
+  * family => arrlea
+  * typeCode => (01,公交车),(02,出租车),(03,货运车),(04,城际班车),(98,其他车辆),(99,未知车辆)
+  * cityCode => (01,深圳市),(02,广州市),(03,惠州市),(04,珠海市)(05,中山市),(06,广东省),(98,全国),(99,不区分城市)
+  *
+  * @param rowKey          typeCode|carId|tripId|stationIndex
+  * @param tripId          32位UUID
+  * @param lineId          线路ID
+  * @param direct          方向 up,down
+  * @param stationIndex    站点站序
+  * @param stationId       站点ID
+  * @param arrivalTime     到站时间
+  * @param leaveTime       离站时间
+  * @param prefixStationId 上一站点ID
+  * @param nextStationId   下一站点ID
+  */
+case class BusArrivalHBase(rowKey: String, tripId: String, lineId: String, direct: String, stationIndex: String, stationId: String, arrivalTime: String, leaveTime: String, prefixStationId: String, nextStationId: String)
+
+
+/**
   * Created by kong on 2017/6/22.
   */
 case class CaseClassSet()

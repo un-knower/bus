@@ -1,6 +1,7 @@
 package cn.sibat.bus
 
 import java.text.SimpleDateFormat
+import java.util.UUID
 
 import cn.sibat.bus.utils.LocationUtil
 import org.apache.spark.broadcast.Broadcast
@@ -256,7 +257,6 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
         } else {
           toBusArrivalForVisual(confirm).iterator
         }
-        toBusArrivalForVisual(confirm).iterator
       }).toDF()
     }
 
@@ -481,10 +481,13 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
       * 因为diff最小说明两gps点刚好在站点的左右两边。
       * 所以AB两gps点就是线路站点b的到站点，BC作为c的到站点。
       *
+      * 数据示例：2016-12-01T08:39:37.000Z,00,SZB87642,��B87642,03570,03570,0,0,114.24987,22.691336,64962.488281,
+      * 2016-12-01T08:39:32.000Z,0.0,281.0,0.0,0.0,03570,up,1,165.21004296206644,2,370.5036720946121,0
+      *
       * @param routeConfirm 分趟后的df
       * @return
       */
-    private def toBusArrivalData(routeConfirm: Array[String], stationMap: Map[String, Array[StationData]]): Array[String] =
+    private def toBusArrivalData(routeConfirm: Array[String], stationMap: Map[String, Array[StationData]]): Array[BusArrivalHBase] =
     {
       routeConfirm.groupBy { s =>
         val split = s.split(",")
@@ -492,42 +495,63 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
       }.flatMap { s =>
         val list = s._2.sortBy(s => s.split(",")(11))
         //挑选最相似的方向作为主方向
-        val up = stationMap.getOrElse(list(0).split(",")(16) + ",up", Array()).map(sd => Point(sd.stationLon, sd.stationLat))
-        val down = stationMap.getOrElse(list(0).split(",")(16) + ",down", Array()).map(sd => Point(sd.stationLon, sd.stationLat))
+        val up = stationMap.getOrElse(list(0).split(",")(16) + ",up", Array())
+        val down = stationMap.getOrElse(list(0).split(",")(16) + ",down", Array())
+        val upLonLat = up.map(sd => Point(sd.stationLon, sd.stationLat))
+        val downLonLat = down.map(sd => Point(sd.stationLon, sd.stationLat))
         val gpsLonLat = list.map(s => {
           val split = s.split(",")
           Point(split(8).toDouble, split(9).toDouble)
         })
-        val direct_up = FrechetUtils.compareGesture(up, gpsLonLat)
-        val direct_down = FrechetUtils.compareGesture(down, gpsLonLat)
+        val direct_up = FrechetUtils.compareGesture(upLonLat, gpsLonLat)
+        val direct_down = FrechetUtils.compareGesture(downLonLat, gpsLonLat)
         var direct = "up"
         if (direct_up > direct_down)
           direct = "down"
-        val stationArray = stationMap.getOrElse(list(0).split(",")(16) + "," + direct, Array())
-        val result = new ArrayBuffer[String]()
-        for (i <- 0 until s._2.length - 1) {
-          val first = list(i).split(",")
-          val next = list(i + 1).split(",")
-          val firstLon = first(8).toDouble
-          val firstLat = first(9).toDouble
-          val nextLon = next(8).toDouble
-          val nextLat = next(9).toDouble
 
-          var minDiff = Double.MaxValue
-          var standLocation = 0
-          stationArray.foreach { sd =>
-            val ld = LocationUtil.distance(firstLon, firstLat, sd.stationLon, sd.stationLat)
-            val rd = LocationUtil.distance(nextLon, nextLat, sd.stationLon, sd.stationLat)
-            val pd = LocationUtil.distance(firstLon, firstLat, nextLon, nextLat)
-            val diff = ld + rd - pd
-            if (diff < minDiff) {
-              minDiff = diff
-              standLocation = sd.stationSeqId
+        val result = new ArrayBuffer[BusArrivalHBase]()
+        val tripId = UUID.randomUUID().toString.replaceAll("-","")
+        var index = 0
+        var firstOne:BusArrivalHBase = null
+        var count = 0
+        list.foreach { line =>
+          val split = line.split(",")
+          val lineId = split(4)
+          val carId = split(3)
+          val sdArr = if (direct.equals("up")) up else down
+          val time = split(11)
+          var max = Double.MaxValue
+          var stationInd = 0
+          var stationId = ""
+          var prefixStationId = "null"
+          var nextStationId = "null"
+          for (i <- sdArr.indices) {
+            val dis = LocationUtil.distance(sdArr(i).stationLon, sdArr(i).stationLat, split(8).toDouble, split(9).toDouble)
+            if (max > dis) {
+              max = dis
+              prefixStationId = if (i > 0) sdArr(i - 1).stationId else "null"
+              nextStationId = if (i < sdArr.length - 1) sdArr(i + 1).stationId else "null"
+              stationInd = sdArr(i).stationSeqId
+              stationId = sdArr(i).stationId
             }
           }
-          result += list(i) + "," + standLocation + "," + minDiff
+          val targetStationIndex = "0" * (3 - stationInd.toString.length) + stationInd
+          if (index == stationInd && max <= 50) {
+            count += 1
+            firstOne = BusArrivalHBase("01|" + carId + "|" + tripId + "|" + targetStationIndex, tripId, lineId, direct, targetStationIndex, stationId,
+              time, time, prefixStationId, nextStationId)
+          } else if (max <= 50 && index != stationInd) {
+            if (count > 0) {
+              val bah = result(result.length-1).copy(leaveTime = firstOne.leaveTime)
+              result.remove(result.length-1)
+              result += bah
+            }
+            result += BusArrivalHBase("01|" + carId + "|" + tripId + "|" + targetStationIndex, tripId, lineId, direct, targetStationIndex, stationId,
+              time, time, prefixStationId, nextStationId)
+            index = stationInd
+            count = 0
+          }
         }
-        result += list(s._2.length - 1) + ",0,0"
         result
       }.toArray
     }

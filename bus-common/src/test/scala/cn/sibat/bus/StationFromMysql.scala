@@ -14,8 +14,7 @@ import scala.collection.mutable.ArrayBuffer
 object StationFromMysql {
   def main(args: Array[String]) {
     val spark = SparkSession.builder().config("spark.sql.warehouse.dir", "file:///c:/path/to/my").appName("DirectNULLToPredict").master("local[*]").getOrCreate()
-    val url = "jdbc:mysql://210.75.252.138:4522/xbus_v2?user=xbpeng&password=xbpeng"
-    //val url = "jdbc:mysql://192.168.40.27:3306/xbus?user=test&password=test"
+    val url = "jdbc:mysql://xxx"
     val prop = new Properties()
     val lineDF = spark.read.jdbc(url, "line", prop)
     val lineStopDF = spark.read.jdbc(url, "line_checkpoint", prop)

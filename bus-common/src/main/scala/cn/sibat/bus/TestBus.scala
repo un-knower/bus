@@ -64,7 +64,12 @@ object TestBus {
 
 
   def main(args: Array[String]): Unit = {
-    val l = 1
-    println(UUID.randomUUID().toString, "0" * (3-l.toString.length) + l)
+    val a = new ArrayBuffer[Int]()
+    (0 to 10).foreach(i => a += i)
+    println(a.mkString(","))
+    val gg = 555
+    a.remove(a.length-1)
+    a += gg
+    println(a.mkString(","))
   }
 }
