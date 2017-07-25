@@ -94,8 +94,10 @@ object FrechetUtils {
         val arr = new Array[Double](line2.length).map(_ - 1.0)
         matrix(i) = arr
         for (j <- line2.indices) {
-          if (i == 0) {
+          if (i == 0 && j == 0) {
             matrix(i)(j) = disP(line1(i), line2(j))
+          } else if (i == 0 && j > 0) {
+            matrix(i)(j) = math.max(disP(line1(i), line2(j)), disP(line1(i), line2(j - 1)))
           } else if (j == 0 && i > 0) {
             matrix(i)(j) = math.max(matrix(i - 1)(j), disP(line1(i), line2(j)))
           } else {
