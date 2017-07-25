@@ -15,7 +15,7 @@ object BMWAPP {
       val cardId = value.split(",")(0)
       list.contains(cardId)
     }
-    spark.read.textFile("D:/testData/公交处/data/busOD/*/*/*/*").filter(targetSZT(col("value"))).repartition(1).rdd.saveAsTextFile("D:/testData/公交处/targetBusOD")
-    spark.read.textFile("D:/testData/公交处/data/metroOD/*/*").filter(targetSZT(col("value"))).repartition(1).rdd.saveAsTextFile("D:/testData/公交处/targetMetroOD")
+    spark.read.textFile("D:/testData/公交处/data/2017-06-30_01.txt").distinct().rdd.saveAsTextFile("D:/testData/公交处/data/2017-06-30_01-bmw")
+    //spark.read.textFile("D:/testData/公交处/data/metroOD/*/*").filter(targetSZT(col("value"))).repartition(1).rdd.saveAsTextFile("D:/testData/公交处/targetMetroOD")
   }
 }

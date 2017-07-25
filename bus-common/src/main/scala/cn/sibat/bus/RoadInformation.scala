@@ -58,7 +58,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
           for (i <- many.indices) {
             val line = stationMap.getOrElse(many(i).route + "," + middle(i).split(",")(0), Array()).map(sd => sd.stationLon + "," + sd.stationLat)
             val linePoint = FrechetUtils.lonLat2Point(line)
-            val frechet = FrechetUtils.compareGesture(linePoint, gpsPoint)
+            val frechet = FrechetUtils.compareGesture1(linePoint, gpsPoint)
             if (frechet < minCost) {
               minCost = frechet
               trueI = i
@@ -198,7 +198,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
         val lineId = split(4)
         lon_lat += Point(lon, lat)
         val stationData = stationMap.getOrElse(lineId + ",up", Array()).map(sd => Point(sd.stationLon, sd.stationLat))
-        val frechetDis = FrechetUtils.compareGesture(lon_lat.toArray, stationData)
+        val frechetDis = FrechetUtils.compareGesture1(lon_lat.toArray, stationData)
         result + "," + frechetDis
       }
       gps
@@ -502,8 +502,8 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
         val split = s.split(",")
         Point(split(8).toDouble, split(9).toDouble)
       })
-      val direct_up = FrechetUtils.compareGesture(upLonLat, gpsLonLat)
-      val direct_down = FrechetUtils.compareGesture(downLonLat, gpsLonLat)
+      val direct_up = FrechetUtils.compareGesture1(upLonLat, gpsLonLat)
+      val direct_down = FrechetUtils.compareGesture1(downLonLat, gpsLonLat)
       var direct = "up"
       if (direct_up > direct_down)
         direct = "down"
@@ -660,7 +660,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
         it.foreach { data =>
           val point = new Point(data.getDouble(data.fieldIndex("lon")), data.getDouble(data.fieldIndex("lat")))
           arr.+=(point)
-          val dis = FrechetUtils.compareGesture(arr.toArray, station)
+          val dis = FrechetUtils.compareGesture1(arr.toArray, station)
           result += TripVisualization(index, data.getInt(data.fieldIndex("tripId")), dis)
           index += 1
         }

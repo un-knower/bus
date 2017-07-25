@@ -12,16 +12,19 @@ import scala.collection.mutable.ArrayBuffer
   *
   * @param termId      gps's terminal id gps终端id
   * @param cardId      szt's card id 深圳通id
-  * @param time        gps time gps时间
-  * @param lon         longitude 经度
-  * @param lat         latitude 纬度
+  * @param departTime  depart time 出发时间
+  * @param arrivalTime arrival time 到达时间
+  * @param departLon   depart longitude 出发经度
+  * @param departLat   depart latitude 出发纬度
+  * @param arrivalLon  arrival longitude 到达经度
+  * @param arrivalLat  arrival latitude  到达纬度
   * @param costTime    cost time 花费时间(s)
   * @param mileage     mileage is the end and starting point of the spherical distance 起点与终点的球面距离(m)
   * @param speed       speed = mileage/costTime 速度(m/s)
   * @param eachMileage each point distance 所有点里程(m)
   * @param mode        transportation mode e.g(car,taxi,bus,metro) 出行模式
   */
-case class BmwOD(termId: String, cardId: String, time: String, lon: Double, lat: Double, costTime: Int, mileage: Double, speed: Double, eachMileage: Double, mode: String)
+case class BmwOD(termId: String, cardId: String, departTime: String, arrivalTime: String, departLon: Double, departLat: Double, arrivalLon: Double, arrivalLat: Double, costTime: Int, mileage: Double, speed: Double, eachMileage: Double, mode: String)
 
 /**
   * Created by kong on 2017/7/18.
@@ -60,7 +63,7 @@ object BaoMa {
         map.put("869432068958573", "293345165")
         map.put("353211081239564", "null")
         map.put("null", "null")
-        map.put("353211082799392", "null")
+        map.put("353211082799392", "331357991")
         map.put("353211081239259", "null")
         map.put("353211081668622", "023041813")
         map.put("353211081239820", "328771992")
@@ -83,7 +86,8 @@ object BaoMa {
         var firstTime = ""
         var firstLon = 0.0
         var firstLat = 0.0
-        val od = new ArrayBuffer[BmwOD]()
+        val o = new ArrayBuffer[BmwOD]()
+        val d = new ArrayBuffer[BmwOD]()
         var dis = 0.0
         var count = 1
         val data = it.toArray
@@ -95,7 +99,7 @@ object BaoMa {
             firstLat = row.getDouble(row.fieldIndex("lat"))
             result.+=(row.mkString(",") + ",0,0.0,0.0")
             //起点，时间，经度，纬度，花费时间，里程，速度，各点总距离
-            od.+=(BmwOD(s, map.getOrElse(s, "null"), firstTime, firstLon, firstLat, 0, 0.0, 0.0, 0.0, "car"))
+            o.+=(BmwOD(s, map.getOrElse(s, "null"),"","","","" firstTime, firstLon, firstLat, 0, 0.0, 0.0, 0.0, "car"))
           } else {
             val lastTime = row.getString(row.fieldIndex("time"))
             val lastLon = row.getDouble(row.fieldIndex("lon"))
@@ -106,21 +110,21 @@ object BaoMa {
             val speed = movement / t
 
             if (standTime > 300 && count < length) {
-              val firstOD = od(od.length - 1)
+              val firstOD = o(o.length - 1)
               val costTime = if (firstOD.costTime != 0) 0 else DateUtil.dealTime(firstOD.time, firstTime)
               val mileage = if (firstOD.costTime != 0) 0 else LocationUtil.distance(firstLon, firstLat, firstOD.lon, firstOD.lat)
               val speed = if (firstOD.costTime != 0) 0 else mileage / costTime
               val eachMileage = if (firstOD.costTime != 0) 0 else dis
-              od.+=(BmwOD(s, map.getOrElse(s, "null"), firstTime, firstLon, firstLat, costTime.toInt, mileage, speed, eachMileage, "car"))
-              od.+=(BmwOD(s, map.getOrElse(s, "null"), lastTime, lastLon, lastLat, 0, 0.0, 0.0, 0.0, "car"))
+              d.+=(BmwOD(s, map.getOrElse(s, "null"), firstTime, firstLon, firstLat, costTime.toInt, mileage, speed, eachMileage, "car"))
+              o.+=(BmwOD(s, map.getOrElse(s, "null"), lastTime, lastLon, lastLat, 0, 0.0, 0.0, 0.0, "car"))
               dis = 0.0
             } else if (count == length - 1) {
-              val firstOD = od(od.length - 1)
+              val firstOD = o(o.length - 1)
               val costTime = if (firstOD.costTime != 0) 0 else DateUtil.dealTime(firstOD.time, lastTime)
               val mileage = if (firstOD.costTime != 0) 0 else LocationUtil.distance(lastLon, lastLat, firstOD.lon, firstOD.lat)
               val speed = if (firstOD.costTime != 0) 0 else mileage / costTime
               val eachMileage = if (firstOD.costTime != 0) 0 else dis
-              od.+=(BmwOD(s, map.getOrElse(s, "null"), lastTime, lastLon, lastLat, costTime.toInt, mileage, speed, eachMileage, "car"))
+              d.+=(BmwOD(s, map.getOrElse(s, "null"), lastTime, lastLon, lastLat, costTime.toInt, mileage, speed, eachMileage, "car"))
             } else {
               dis += movement
             }
@@ -131,7 +135,7 @@ object BaoMa {
             count += 1
           }
         })
-        od
+        d
       })
       //.count()
       .toDF().repartition(1).rdd.saveAsTextFile("D:/testData/公交处/bmwOD_20170717")
