@@ -30,7 +30,8 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable {
     colType = colType ++ ("String," * 7).split(",") ++ ("Double," * 3).split(",") ++ "String".split(",") ++ ("Double," * 4).split(",")
     val cols = Array("sysTime", "dataType", "term", "carId", "route", "subRoute", "company", "status", "lon"
       , "lat", "high", "upTime", "speed", "direct", "carSpeed", "mileage")
-    newUtils(DataFrameUtils.apply.col2moreCol(data.toDF(), "value", colType, cols: _*))
+    val filterLength = udf((value:String)=> value.split(",").length > 11)
+    newUtils(DataFrameUtils.apply.col2moreCol(data.filter(filterLength(col("value"))), "value", colType, cols: _*))
   }
 
   /**

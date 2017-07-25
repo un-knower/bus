@@ -318,8 +318,8 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
           else if (oneDis > twoDis)
             upOrDown = true
         }
-      }catch {
-        case e:Exception =>
+      } catch {
+        case e: Exception =>
       }
       //方向匹配
       var firstSD: StationData = null //前一记录的站点信息

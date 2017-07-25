@@ -1,8 +1,5 @@
 package cn.sibat.bus
 
-import java.util.UUID
-
-import cn.sibat.bus.utils.LocationUtil
 import org.apache.spark.sql.{Row, SparkSession}
 
 import scala.collection.mutable.ArrayBuffer
@@ -29,6 +26,7 @@ object TestBus {
 
     val station = spark.read.textFile("/user/kongshaohong/bus/lineInfo.csv").map { str =>
       val Array(route, direct, stationId, stationName, stationSeqId, stationLat, stationLon) = str.split(",")
+      import cn.sibat.bus.utils.LocationUtil
       val Array(lat, lon) = LocationUtil.gcj02_To_84(stationLat.toDouble, stationLon.toDouble).split(",")
       new StationData(route, direct, stationId, stationName, stationSeqId.toInt, lon.toDouble, lat.toDouble)
     }.collect()
