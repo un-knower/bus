@@ -172,7 +172,7 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable {
   def dateFormat(sysTimeFormat: String, upTimeFormat: String): BusDataCleanUtils = {
     val sysSdf = new SimpleDateFormat(sysTimeFormat)
     val upSdf = new SimpleDateFormat(upTimeFormat)
-    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
     val sys2ISO = udf((sysTime: String) => {
       try {
         targetSdf.format(sysSdf.parse(sysTime))
@@ -201,7 +201,7 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable {
     */
   def upTimeFormat(timeFormat: String): BusDataCleanUtils = {
     val sdf = new SimpleDateFormat(timeFormat)
-    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
     val time2ISO = udf((upTime: String) => {
       try {
         targetSdf.format(sdf.parse(upTime))
@@ -221,7 +221,7 @@ class BusDataCleanUtils(val data: DataFrame) extends Serializable {
     */
   def sysTimeFormat(timeFormat: String): BusDataCleanUtils = {
     val sdf = new SimpleDateFormat(timeFormat)
-    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'")
+    val targetSdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
     val time2ISO = udf((sysTime: String) => {
       try {
         targetSdf.format(sdf.parse(sysTime))
