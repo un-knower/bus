@@ -12,8 +12,6 @@ class DataFormatUtils(data: Dataset[String]) {
   import data.sparkSession.implicits._
   /**
     * 默认将SZT刷卡产生的原始记录中的每一列贴上字段标签
-    * 字段名称：0.记录编码 1.卡片逻辑编码 2.刷卡设备终端编码 3.公司编码 4.交易类型 5.交易金额 6.卡内余额
-    * 7.未知字段 8.拍卡时间 9.成功标识 10.未知时间1 11.未知时间2 12.公司名称 13.站点名称 14.车辆编号
     * @return
     */
   def transSZT: DataFrame = {
@@ -26,7 +24,6 @@ class DataFormatUtils(data: Dataset[String]) {
 
   /**
     * 从原始数据中删选出地铁刷卡数据，并给地铁打卡数据贴上字段标签
-    * 字段名称：0.记录编码 1.卡片逻辑编码 2.终端编码 3.交易类型 4.拍卡时间 5.线路名称 6.站点名称 7.闸机标识
     * @return
     */
   def transMetroSZT: DataFrame = {
@@ -39,7 +36,6 @@ class DataFormatUtils(data: Dataset[String]) {
 
   /**
     * 从原始数据中筛选出公交刷卡数据，并给公交刷卡数据贴上对应的字段标签
-    * 字段名称：0.记录编码 1.卡片逻辑编码 2.终端编码 3.交易类型 4.拍卡时间 5.公司名称 6.线路名称 7.车牌号
     * @return
     */
   def transBusSZT: DataFrame = {
@@ -51,7 +47,7 @@ class DataFormatUtils(data: Dataset[String]) {
   }
 
   /**
-    * 字段名称：0.站点Id 1.站点名称 2.路线Id 3.路线名称
+    * 地铁静态站点数据（站点名称和站点编号）
     * @return
     */
   def transMetroStation: DataFrame = {
@@ -62,19 +58,66 @@ class DataFormatUtils(data: Dataset[String]) {
   }
 }
 
+/**
+  * 深圳通卡原始数据
+  * @param recordCode 记录编码
+  * @param cardCode 卡片逻辑编码
+  * @param terminalCode 刷卡设备终端编码
+  * @param compCode 公司编码
+  * @param transType 交易类型
+  * @param tranAmount 交易金额
+  * @param cardBalance 卡内余额
+  * @param unknownField 未知字段
+  * @param cardTime 拍卡时间
+  * @param successSign 成功标识
+  * @param unknownTime1 未知时间1
+  * @param unknownTime2 未知时间2
+  * @param compName 公司名称
+  * @param siteName 站点名称
+  * @param vehicleCode 车辆编号
+  */
 case class SZT(recordCode: String, cardCode: String, terminalCode: String, compCode: String, transType: String, tranAmount: Double,
                cardBalance: Double, unknownField: String, cardTime: String, successSign: String, unknownTime1: String,
                unknownTime2: String, compName: String, siteName: String, vehicleCode: String
               )
 
+/**
+  * 深圳通地铁数据
+  * @param recordCode 记录编码
+  * @param cardCode 卡片逻辑编码
+  * @param terminalCode 终端编码
+  * @param transType 交易类型
+  * @param cardTime 拍卡时间
+  * @param routeName 线路名称
+  * @param siteName 站点名称
+  * @param GateMark 闸机标识
+  */
 case class MetroSZT(recordCode: String, cardCode: String, terminalCode: String, transType: String,
                     cardTime: String, routeName: String, siteName: String, GateMark: String
                     )
 
+/**
+  * 深圳通公交数据
+  * @param recordCode 记录编码
+  * @param cardCode 卡片逻辑编码
+  * @param terminalCode 终端编码
+  * @param transType 交易类型
+  * @param cardTime 拍卡时间
+  * @param compName 公司名称
+  * @param routeName 线路名称
+  * @param licenseNum 车牌号
+  */
 case class BusSZT(recordCode: String, cardCode: String, terminalCode: String, transType: String,
                   cardTime: String, compName: String, routeName: String, licenseNum: String
                   )
 
+/**
+  *
+  * @param siteId 站点Id
+  * @param siteNameStatic 站点名称
+  * @param routeId 路线Id
+  * @param routeNameStatic 路线名称
+  */
 case class MetroStation(siteId: String, siteNameStatic: String, routeId: String, routeNameStatic: String)
 
 object DataFormatUtils{
