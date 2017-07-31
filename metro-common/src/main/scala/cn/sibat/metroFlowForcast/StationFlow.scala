@@ -2,9 +2,9 @@ package cn.sibat.metroFlowForcast
 
 import java.text.SimpleDateFormat
 
-import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.sql.{DataFrame, Encoder, SparkSession}
 import org.apache.spark.sql.functions.{col, _}
-import cn.sibat.metroUtils.{MetroOD, TimeUtils}
+import cn.sibat.metroUtils.{TimeUtils, _}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -87,7 +87,7 @@ class StationFlow(val data :DataFrame) extends Serializable{
 
     val df = metroRDD.map(record => record.split(","))
       .filter(arr => arr(3) == "21" && arr(7) == "22")
-      .map(arr => OD(arr(0), arr(1), arr(2), arr(5), arr(6)))
+      .map(arr => ODRecord(arr(0), arr(1), arr(2), arr(5), arr(6)))
       .toDF()
       .filter(col("inSiteCode") =!= col("outSiteCode"))
 
@@ -95,7 +95,7 @@ class StationFlow(val data :DataFrame) extends Serializable{
   }
 
   /**
-    * 获取任意两站之间的平均花费时间
+    * 获取任意两站之间的平均花费时间，按目的站点进行分组，计算其他任意起点站到该站的平均时间，并排序
     * @return
     */
   def getStationTime: StationFlow = {
@@ -105,9 +105,11 @@ class StationFlow(val data :DataFrame) extends Serializable{
       val timeDiff = (sdf.parse(endTime.replace("T", " ")).getTime - sdf.parse(startTime.replace("T", " ")).getTime) / (60F * 1000F) //得到分钟为单位的时间差
       timeDiff
     })
-    val TimeDf = this.data.withColumn("timeDiff", timeDiffUDF(col("inCardTime"), col("outCardTime")))
-    val avgTimeDf = TimeDf.groupBy(col("inSiteCode"), col("outSiteCode")).avg("timeDiff")
-    newObject(avgTimeDf)
+    val TimeDf = this.data.withColumn("timeDiff", timeDiffUDF(col("inCardTime"), col("outCardTime"))).filter(col("timeDiff") < 4 * 60F) //过滤时间超过4小时的出行
+    val avgTimeDf = TimeDf.groupBy("outSiteCode", "inSiteCode").avg("timeDiff").withColumnRenamed("avg(timeDiff)", "avgTime")
+    val sortedDf = avgTimeDf.rdd.map(row => (row.get(row.fieldIndex("outSiteCode")), row)).groupByKey().flatMap(keyPairs => keyPairs._2.toArray.sortBy(row => row.get(row.fieldIndex("avgTime")).asInstanceOf[Double]))
+    val newDf = sortedDf.map(row => ODTime(row(0).toString, row(1).toString, row(2).toString))
+    newObject(newDf.toDF())
   }
 }
 
@@ -125,8 +127,9 @@ object StationFlow {
     val ds = spark.read.textFile(args(0))
     val df = ds.map(row => row.split(",")).map(arr => Metro(arr(0), arr(1), arr(2), arr(3), arr(4))).toDF()
     val newDF = new StationFlow(df).cleanData().addDate()
-    val result = new StationFlow(newDF).mergeOD().getDF
-    result.rdd.map(row => row.mkString(",")).saveAsTextFile("E:\\trafficDataAnalysis\\testData\\targetSZTOD-201706")
+    val result = new StationFlow(newDF).mergeOD().getStationTime.getDF
+
+    result.rdd.map(row => row.mkString(",")).repartition(1).saveAsTextFile("E:\\trafficDataAnalysis\\ODTimeData\\20170102")
   }
 }
 
@@ -141,11 +144,19 @@ object StationFlow {
 case class Metro(cardCode: String, cardTime: String, siteCode: String, transType: String, upTime: String)
 
 /**
-  * 地铁OD数据
+  * 地铁OD记录数据
   * @param cardCode 卡号
   * @param inCardTime 入站刷卡时间
   * @param inSiteCode 入站站点编码
   * @param outCardTime 出站刷卡时间
   * @param outSiteCode 出站站点编码
   */
-case class OD(cardCode: String, inCardTime: String, inSiteCode: String, outCardTime: String, outSiteCode: String)
+case class ODRecord(cardCode: String, inCardTime: String, inSiteCode: String, outCardTime: String, outSiteCode: String)
+
+/**
+  * 乘客乘车时间
+  * @param outSiteCode 出站编码
+  * @param inSiteCode 进站编码
+  * @param avgTime 平均时间
+  */
+case class ODTime(outSiteCode: String, inSiteCode: String, avgTime: String)
