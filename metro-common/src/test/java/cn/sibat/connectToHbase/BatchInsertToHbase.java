@@ -61,26 +61,25 @@ public class BatchInsertToHbase {
         int count = 0;
 
         while (line != null) {
-            //若提交的列表数目超过指定行，则提交列表；否则往列表里面添加行
-            if (list.size() > lineCount) {
+            //若提交的列表数目等于指定行，则提交列表；否则往列表里面添加行
+//            if (list.size() == lineCount) {
+//
+//                table.put(list);
+//                table.flushCommits();
+//                list.clear();
+//                System.out.println("已插入数据" + count + "条");
+//
+//            }
 
-                table.put(list);
-                table.flushCommits();
-                list.clear();
-                System.out.println("已插入数据" + count + "条");
+            String arr_value[] = line.split(",", 2);
 
-            } else {
+            String rowKey = arr_value[0];
+            String value = arr_value[1];
 
-                String arr_value[] = line.split(",", 2);
+            Put p = new Put(rowKey.getBytes());
 
-                String rowKey = arr_value[0];
-                String value = arr_value[1];
-
-                Put p = new Put(rowKey.getBytes());
-
-                p.add(("value").getBytes(), "".getBytes(), value.getBytes());
-                list.add(p);
-            }
+            p.add(("value").getBytes(), "".getBytes(), value.getBytes());
+            list.add(p);
 
             line = br.readLine();
             count++;
