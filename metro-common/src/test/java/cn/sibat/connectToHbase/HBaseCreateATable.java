@@ -10,24 +10,24 @@ import org.apache.hadoop.hbase.TableName;
 
 import org.apache.hadoop.conf.Configuration;
 
+/**
+ * 创建表格
+ */
 public class HBaseCreateATable {
 
     public static void main(String[] args) throws IOException {
 
         // Instantiating configuration class
         Configuration con = HBaseConfiguration.create();
-
-        con.set("hbase.zookeeper.quorum", "localhost");
-        con.set("hbase.master", "localhost:16000");
+        con.set("hbase.zookeeper.quorum","192.168.40.49");
         // Instantiating HbaseAdmin class
         HBaseAdmin admin = new HBaseAdmin(con);
 
         // Instantiating table descriptor class
-        HTableDescriptor tableDescriptor = new HTableDescriptor(TableName.valueOf("emp"));
+        HTableDescriptor tableDescriptor = new HTableDescriptor(TableName.valueOf("GdRoadTest"));
 
         // Adding column families to table descriptor
-        tableDescriptor.addFamily(new HColumnDescriptor("personal"));
-        tableDescriptor.addFamily(new HColumnDescriptor("professional"));
+        tableDescriptor.addFamily(new HColumnDescriptor("value"));
 
         // Execute the table through admin
         admin.createTable(tableDescriptor);
