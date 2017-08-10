@@ -8,6 +8,7 @@ import java.util.ResourceBundle;
 
 /**
  * @author zhengshaorong
+ * 参数配置
  */
 public class Cfg {
 	public static final String SEPARATOR = "separator";

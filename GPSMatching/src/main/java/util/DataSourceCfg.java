@@ -8,6 +8,7 @@ import java.util.ResourceBundle;
 
 /**
  * @author zhengshaorong
+ * 数据配置
  */
 public class DataSourceCfg {
     public static final String INDEX_BUS_SYSTEMTIME = "index.bus.systemtime";

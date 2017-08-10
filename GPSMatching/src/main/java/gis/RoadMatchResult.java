@@ -3,6 +3,9 @@ package gis;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
+/**
+ * 点在道路上的匹配结果
+ */
 public class RoadMatchResult {
 	//原始坐标
 	public double src_lng;

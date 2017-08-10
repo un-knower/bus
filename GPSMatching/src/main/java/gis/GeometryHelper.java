@@ -10,7 +10,6 @@ import org.geotools.geometry.jts.JTSFactoryFinder;
 
 public class GeometryHelper {
 	private static double EARTH_RADIUS = 6378.137;
-	
 
 	public static double rad(double d) {
 		return d * Math.PI / 180.0;
@@ -20,36 +19,78 @@ public class GeometryHelper {
 		return angle;
 		//return angle * 180.0 / Math.PI;
 	}
-	
+
+
 	public static GeometryFactory geometryFactory  = JTSFactoryFinder.getGeometryFactory();
-	
+
+    /**
+     *
+     * @param point
+     * @param road
+     * @return 一个点在一条线上的投影点
+     */
 	public static Point GetClosestPoint(Point point , LineString road)
 	{
 		return geometryFactory.createPoint(DistanceOp.closestPoints(road,point)[0]);
 	}
-	
+
+    /**
+     *
+     * @param x1
+     * @param y1
+     * @param x2
+     * @param y2
+     * @return 两个经纬度，创建一条线
+     */
 	public static LineString CreateLine(double x1,double y1,double x2,double y2)
 	{
 		Coordinate[] array=new Coordinate[]{new Coordinate(x1,y1),new Coordinate(x2,y2)};
 		return geometryFactory.createLineString(array);
 	}
-	
+
+    /**
+     *
+     * @param p1
+     * @param p2
+     * @return 两个点创建一条线
+     */
 	public static LineString CreateLine( Point p1, Point p2)
 	{
 		Coordinate[] array=new Coordinate[]{p1.getCoordinate(),p2.getCoordinate()};
 		return geometryFactory.createLineString(array);
 	}
-	
+
+    /**
+     *
+     * @param p1
+     * @param p2
+     * @return 两个点的千米距离
+     */
 	public static double GetDistanceInKm(Point p1,Point p2)
 	{
 		return  GetDistance(p1.getY(),p1.getX(),p2.getY(),p2.getX())/1000;
 	}
-	
+
+    /**
+     *
+     * @param lng1
+     * @param lat1
+     * @param lng2
+     * @param lat2
+     * @return 两个经纬度的千米距离
+     */
 	public static double GetDistanceInKm(double lng1,double lat1,double lng2,double lat2){
 		return GetDistance(lat1, lng1, lat2, lng2)/1000;
 	}
-	
-	
+
+    /**
+     *
+     * @param lat1
+     * @param lng1
+     * @param lat2
+     * @param lng2
+     * @return 两个经纬度的距离
+     */
 	//GetDistance in meters,(m)
 	public static double GetDistance(double lat1, double lng1, double lat2,
 			double lng2) {
@@ -69,12 +110,23 @@ public class GeometryHelper {
 	{
 		return Angle.normalizePositive(Angle.angle(p1.getCoordinate(),p2.getCoordinate()));
 	}
-	
+
+    /**
+     *
+     * @param angle
+     * @return 两个角度的逆角度差
+     */
 	public static double ReverseAngle(double angle)
 	{
 		return Angle.normalizePositive(angle - Math.PI);
 	}
-	
+
+    /**
+     *
+     * @param angle1
+     * @param angle2
+     * @return 两个角度的角度差
+     */
 	public static double GetAngleDiff(double angle1,double angle2)
 	{
 		return Angle.diff(angle1,angle2);

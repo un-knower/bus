@@ -7,6 +7,7 @@ import java.text.ParseException;
 
 /**
  * Created by User on 2017/5/19.
+ *  * 配置好文件后，可以根据输入的文件夹地址循环处理原始E6 GPS记录，并输出处理后的数据
  */
 public class E6HistioryData {
     private static FileReader fileReader;

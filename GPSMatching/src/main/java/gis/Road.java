@@ -18,7 +18,17 @@ public class Road implements Serializable {
 	
 	public double positive_angle;
 	public double negative_angle;
-	
+
+	/**
+	 *
+	 * @param roadID
+	 * @param roadName
+	 * @param width
+	 * @param negative_max_speed
+	 * @param positive_max_speed
+	 * @param geometry
+	 * Road的构造器
+	 */
 	public Road(String roadID, String roadName, double width,double negative_max_speed,double positive_max_speed,LineString geometry)
 	{
 		this.roadID=roadID;
@@ -45,7 +55,13 @@ public class Road implements Serializable {
 	{
 		return point.distance(geometry);
 	}
-	
+
+	/**
+	 *
+	 * @param another_angle
+	 * @param point
+	 * @return 得到道路角度差
+	 */
 	public double angleDiff(double another_angle,Point point)
 	{
 		//比较道路角度差异时，只使用离匹配点较近的几个点
@@ -104,7 +120,13 @@ public class Road implements Serializable {
 	private boolean between(double x,double lower,double upper){
 		return (x >= lower && x<=upper) || (x >= upper && x <= lower);
 	}
-	
+
+	/**
+	 *
+	 * @param point
+	 * @param ahead_angle
+	 * @return 点到道路出口入口距离
+	 */
 	public double[] lengthToEntranceAndExit(Point point, double ahead_angle){
 		int n = this.geometry.getNumPoints();
 		double x = point.getX();

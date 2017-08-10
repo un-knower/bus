@@ -1,5 +1,8 @@
 package util;
 
+/**
+ * GPS坐标系的转化
+ */
 public class GPS {
 
 	static double pi = 3.14159265358979324;

@@ -6,6 +6,7 @@ import java.io.*;
 
 /**
  * Created by User on 2017/5/18.
+ * 输出处理结果到文件
  */
 public class WriteFile {
 

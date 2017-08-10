@@ -36,7 +36,12 @@ public class RoadMatcher {
 		}
 	}
 
-
+	/**
+	 *
+	 * @param path
+	 * @return 加载shp文件，建立城市路网数据
+	 * @throws IOException
+	 */
 	private HashMap<String, ArrayList<Road>> read(String path) throws IOException {
 
 		//载入SHP文件
@@ -116,7 +121,11 @@ public class RoadMatcher {
 		return roadmap;
 	}
 
-
+	/**
+	 *
+	 * @param record_to_match
+	 * @return gps记录匹配路网数据
+	 */
 	public RoadMatchResult matchRoad(GpsRecord record_to_match)
 	{
 		//long start = new Date().getTime();

@@ -3,6 +3,9 @@ package gis;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
+/**
+ * 设备信息
+ */
 public class VehicleInfo {
 	public String road_id;
 	public String vehicle;
