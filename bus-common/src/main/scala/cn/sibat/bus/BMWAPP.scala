@@ -1,5 +1,8 @@
 package cn.sibat.bus
 
+import java.text.SimpleDateFormat
+import java.util.Date
+
 import cn.sibat.bus.utils.{DateUtil, LocationUtil}
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.functions._
@@ -29,28 +32,46 @@ case class BmwOD(termId: String, cardId: String, departTime: String, arrivalTime
 /**
   * Created by kong on 2017/7/18.
   */
-object BMWAPP {
+object BMWAPP extends Serializable {
+
+  /**
+    * 求时间的平均值与方差
+    * @param x 时间集合
+    * @return (mean,variance)
+    */
+  def timeMean(x: Array[Double]): (Double, Double) = {
+    var mean = 0.0
+    var temp = Double.MaxValue
+    for (i <- 0 until 240) {
+      var sum = 0.0
+      for (j <- x.indices) {
+        sum += math.pow(12 - math.abs(math.abs(i.toDouble / 10 - x(j)) - 12), 2)
+      }
+      if (sum < temp) {
+        temp = sum
+        mean = i.toDouble / 10
+      }
+    }
+    (mean, temp / x.length)
+  }
 
   def bmwOD(data: Dataset[String], savePath: String): Unit = {
     import data.sparkSession.implicits._
-    data.map(s => s.replaceAll("\"", "").replaceAll(",,", ",null,")).map(line => {
+    data.map(s => s.replaceAll("\"", "").replaceAll(",,", ",null,")).filter(_.split(",").length > 8).map(line => {
       val split = line.split(",")
-      if (split.length > 8) {
-        val id = split(0)
-        val gpsTime = split(8).replaceAll("\"", "")
-        val lon = split(2).toDouble
-        val lat = split(3).toDouble
-        val imsi = split(4)
-        val speed = split(5).toDouble
-        val seqId = split(6)
-        val direct = split(7)
-        val systemTime = split(1).replaceAll("\"", "")
-        val date = gpsTime.split(" ")(0)
-        (id, systemTime, lon, lat, imsi, speed, seqId, direct, gpsTime, date)
-      } else {
-        None
-      }
-    }).filter(_ != null).toDF("id", "systemTime", "lon", "lat", "imsi", "speed", "seqId", "direct", "gpsTime", "date").distinct()
+
+      val id = split(0)
+      val gpsTime = split(8).replaceAll("\"", "")
+      val lon = split(2).toDouble
+      val lat = split(3).toDouble
+      val imsi = split(4)
+      val speed = split(5).toDouble
+      val seqId = split(6)
+      val direct = split(7)
+      val systemTime = split(1).replaceAll("\"", "")
+      val date = gpsTime.split(" ")(0)
+      (id, systemTime, lon, lat, imsi, speed, seqId, direct, gpsTime, date)
+    }).toDF("id", "systemTime", "lon", "lat", "imsi", "speed", "seqId", "direct", "gpsTime", "date")
       .select(col("id"), col("gpsTime").as("time"), col("lon"), col("lat"), col("date"))
       .distinct()
       .groupByKey(row => row.getString(row.fieldIndex("id")) + "," + row.getString(row.fieldIndex("date")))
@@ -95,7 +116,7 @@ object BMWAPP {
             firstLon = row.getDouble(row.fieldIndex("lon"))
             firstLat = row.getDouble(row.fieldIndex("lat"))
             //起点：出发时间，到达时间，出发经度，出发纬度，到达经度，到达纬度，花费时间，里程，速度，各点总距离
-            od.+=(BmwOD(s, map.getOrElse(s, "null"), firstTime, "null", firstLon, firstLat, 0.0, 0.0, 0, 0.0, 0.0, 0.0, "car"))
+            od.+=(BmwOD(s, map.getOrElse(s.split(",")(0), "null"), firstTime, "null", firstLon, firstLat, 0.0, 0.0, 0, 0.0, 0.0, 0.0, "car"))
           } else {
             val lastTime = row.getString(row.fieldIndex("time"))
             val lastLon = row.getDouble(row.fieldIndex("lon"))
@@ -122,7 +143,7 @@ object BMWAPP {
               val nowOD = firstOD.copy(arrivalTime = firstTime, costTime = costTime.toInt, mileage = mileage, speed = speed, eachMileage = eachMileage, arrivalLon = firstLon, arrivalLat = firstLat)
               od.remove(od.length - 1)
               od.+=(nowOD)
-              od.+=(BmwOD(s, map.getOrElse(s, "null"), lastTime, "null", lastLon, lastLat, 0.0, 0.0, 0, 0.0, 0.0, 0.0, "car"))
+              od.+=(BmwOD(s, map.getOrElse(s.split(",")(0),"null"), lastTime, "null", lastLon, lastLat, 0.0, 0.0, 0, 0.0, 0.0, 0.0, "car"))
               temp = false
             } else if (count == length - 1) {
               //最后一个行程
@@ -150,15 +171,11 @@ object BMWAPP {
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().appName("BMWApp").getOrCreate()
-    val list = Array("086540035", "665388436", "023041813", "362774134", "392335926", "660941532", "684043989", "361823600"
-      , "667338104", "685844167", "362166709", "295587058")
-    val targetSZT = udf { (value: String) =>
-      val cardId = value.split(",")(0)
-      list.contains(cardId)
-    }
-    var datePath = "/user/kongshaohong/baomaGPS/"
+    val sdf = new SimpleDateFormat("yyyy-MM")
     val l = System.currentTimeMillis()
-    var savePath = "/user/kongshaohong/bmwOD/default-" + l
+    val date = sdf.format(new Date(l))
+    var datePath = "/user/kongshaohong/baomaGPS/"+date
+    var savePath = "/user/kongshaohong/baomaOD/default-" + date
     if (args.length > 1) {
       datePath = args(0)
       savePath = args(1)

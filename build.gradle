@@ -67,7 +67,7 @@ subprojects {
     /*类库配置*/
     repositories {
         /**maven的私库*/
-        //repositories { maven { url 'http://maven.aliyun.com/mvn/repository/' }}
+        repositories { maven { url 'http://maven.aliyun.com/mvn/repository/' }}
         // mavenLocal()
         /*默认库*/
         mavenCentral()

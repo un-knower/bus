@@ -1,6 +1,10 @@
 package cn.sibat.bus
 
+import java.io.File
+import javax.xml.parsers.{DocumentBuilder, DocumentBuilderFactory}
+
 import org.apache.spark.sql.{Row, SparkSession}
+import org.w3c.dom.Node
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -62,12 +66,14 @@ object TestBus {
 
 
   def main(args: Array[String]): Unit = {
-    val a = new ArrayBuffer[Int]()
-    (0 to 10).foreach(i => a += i)
-    println(a.mkString(","))
-    val gg = 555
-    a.remove(a.length-1)
-    a += gg
-    println(a.mkString(","))
+    val data = "113.908439,22.482539;\n113.908021,22.482143;\n113.908477,22.483114;\n113.908956,22.482767;\n113.908365,22.483066;\n113.908757,22.48358;\n113.908394,22.482901;\n113.909539,22.48304;\n113.908526,22.48304;\n113.908285,22.482853;\n113.906366,22.484611;\n113.908259,22.482254;\n113.908624,22.483146;".split("\n")
+
+    var sum = (0.0, 0.0)
+    data.foreach(s=>{
+      val Array(lon,lat) = s.replace(";","").split(",").map(_.toDouble)
+      sum = sum.copy(sum._1 + lon,sum._2 + lat)
+    })
+
+    println(sum._1/data.length,sum._2/data.length)
   }
 }
