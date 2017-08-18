@@ -3,6 +3,7 @@ sourceSets {
         scala {
             srcDirs = ['src/main/scala', 'src/main/java']
         }
+
         java {
             srcDirs = []
         }
@@ -26,14 +27,17 @@ task "createDirs" << {
     sourceSets*.resources.srcDirs*.each { it.mkdirs() }
 }
 
-/*类库配置*/
-repositories {
-    /*默认库*/
-    mavenCentral()
-}
+//jar {
+//    manifest {
+//        attributes 'Implementation-Title': 'Gradle Jar File Example',
+//                'Implementation-Version': version,
+//                'Main-Class': 'connectToHbase.BatchInsertToHbase'
+//    }
+//}
 
 dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.11'
     compile group: 'org.jgrapht', name: 'jgrapht-core', version: '1.0.1'
     compile 'net.sourceforge.jchardet:jchardet:1.0'
+    compile 'org.apache.hbase:hbase-client:0.96.1.1-hadoop2'
 }
