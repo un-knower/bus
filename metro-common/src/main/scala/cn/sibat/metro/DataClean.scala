@@ -1,13 +1,14 @@
 package cn.sibat.metro
 
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.functions.{col, _}
 
 /**
   * 深圳通数据清洗工具，使用链式写法，给每一个异常条件（清洗规则）添加方法
   * Created by wing1995 on 2017/5/4.
   */
-class DataCleanUtils (val data: DataFrame) {
+class DataClean (val data: DataFrame) {
 
   /**
     * 将清洗完的数据返回
@@ -18,9 +19,9 @@ class DataCleanUtils (val data: DataFrame) {
   /**
     * 构造伴生对象，返回对象本身，实现链式写法
     * @param df 清洗后的DataFrame
-    * @return 原对象 DataCleanUtils
+    * @return 原对象 DataClean
     */
-  private def newUtils(df: DataFrame): DataCleanUtils = new DataCleanUtils(df)
+  private def newUtils(df: DataFrame): DataClean = new DataClean(df)
 
   /**
     * 针对深圳通原始数据，添加日期列
@@ -28,7 +29,7 @@ class DataCleanUtils (val data: DataFrame) {
     * 将此日期添加到DataFrame，并将其他列删除
     * @return self
     */
-  def addDate(): DataCleanUtils = {
+  def addDate(): DataClean = {
     val time2date = udf{(time: String) => time.split(" ")(0)}
     val addStamp = this.data.withColumn("dateStamp", unix_timestamp(col("cardTime"), "yyyy-MM-dd HH:mm:ss"))
     val addDate = addStamp.withColumn("oldDate", time2date(col("cardTime"))) //旧日期
@@ -47,10 +48,10 @@ class DataCleanUtils (val data: DataFrame) {
     * @param dataStation 静态地铁站点数据
     * @return 原对象DataCleanUtils
     */
-  def recoveryData(dataStation: DataFrame): DataCleanUtils = {
+  def recoveryData(dataStation: Broadcast[DataFrame]): DataClean = {
     val siteIdCol = udf { (terminalCode: String) => terminalCode.slice(0, 6) }
     val tmpData = this.data.withColumn("siteId", siteIdCol(col("terminalCode")))
-    var recoveryData = tmpData.join(dataStation, Seq("siteId"))
+    var recoveryData = tmpData.join(dataStation.value, Seq("siteId"))
     recoveryData = recoveryData.withColumn("siteName", when(col("siteName").equalTo("siteNameStatic"), col("siteName")).otherwise(col("siteNameStatic")))
       .withColumn("routeName", when(col("routeName").equalTo(col("routeNameStatic")), col("routeName")).otherwise(col("routeNameStatic")))
       //.select("cardCode", "terminalCode", "transType", "cardTime", "routeName", "siteName", "GateMark", "date")
@@ -58,6 +59,6 @@ class DataCleanUtils (val data: DataFrame) {
   }
 }
 
-object DataCleanUtils {
-  def apply(data: DataFrame): DataCleanUtils = new DataCleanUtils(data)
+object DataClean {
+  def apply(data: DataFrame): DataClean = new DataClean(data)
 }

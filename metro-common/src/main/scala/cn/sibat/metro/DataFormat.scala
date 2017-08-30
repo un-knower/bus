@@ -28,7 +28,7 @@ class DataFormatUtils(data: Dataset[String]) {
     */
   def transMetroSZT: DataFrame = {
     val metro_SZT_df= data.map(_.split(","))
-      .filter(line => line(2).matches("2[46].*"))  //compId以"24"或"26"开头的数据
+      .filter(line => line(2).matches("2[46].*"))  //刷卡设备终端编码以"24"或"26"开头的数据
       .map(line => MetroSZT(line(0), line(1), line(2), line(4), line(8), line(12), line(13), line(14)))
       .toDF()
     metro_SZT_df
@@ -40,7 +40,7 @@ class DataFormatUtils(data: Dataset[String]) {
     */
   def transBusSZT: DataFrame = {
     val bus_SZT_df= data.map(_.split(","))
-      .filter(line => line(2).matches("2[235].*")) //compId以“22”或“23”和“25”开头的数据
+      .filter(line => line(2).matches("2[235].*")) //刷卡设备终端编码以“22”或“23”和“25”开头的数据
       .map(line => BusSZT(line(0), line(1), line(2), line(4), line(8), line(12), line(13), line(14)))
       .toDF()
     bus_SZT_df
@@ -65,8 +65,8 @@ class DataFormatUtils(data: Dataset[String]) {
   * @param terminalCode 刷卡设备终端编码
   * @param compCode 公司编码
   * @param transType 交易类型
-  * @param tranAmount 交易金额（实际交易金额）
-  * @param cardBalance 交易值
+  * @param tranAmount 交易金额
+  * @param cardBalance 交易值（实际交易金额）
   * @param unknownField 未知字段
   * @param cardTime 拍卡时间
   * @param successSign 成功标识

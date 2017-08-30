@@ -115,7 +115,7 @@ object CarFreeDayAPP extends Serializable{
         import df.sparkSession.implicits._
 
         //主要给数据添加日期（以凌晨4点为分割线）
-        val cleanData = DataCleanUtils.apply(df).addDate().toDF
+        val cleanData = DataClean.apply(df).addDate().toDF
         //对地铁数据做补全站点处理
         val newData = cleanData.map(row => {
             val siteId = row.getString(row.fieldIndex("terminalCode"))
