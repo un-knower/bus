@@ -3,14 +3,13 @@ package cn.sibat.metro
 import java.io._
 import java.sql.{DriverManager, PreparedStatement}
 
+import com.esotericsoftware.kryo.Kryo
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.hadoop.mapred.TextInputFormat
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.sql._
-import org.apache.spark.sql.functions._
 
-import scala.collection.mutable
-import scala.io.Source
 import scala.language.postfixOps
 import utils.TimeUtils
 
@@ -31,31 +30,76 @@ import utils.TimeUtils
   * @param stationNumNotBeen 还没有去过的地铁站点数目
   * @param awardRank 获奖等级
   */
-case class CardRecord(cardId: String, count: Int, earliestOutTime: String, frequentBusLine: String,
+case class CardRecord (cardId: String, count: Int, earliestOutTime: String, frequentBusLine: String,
                       frequentSubwayStation: String, largestNumberPeople: Int, latestGoHomeTime: String,
                       mostExpensiveTrip: Double, workingDays: Int, reducedCarbonEmission: Double, restDays: Int,
                       tradeAmount: Double, stationNumNotBeen: Int, awardRank: String)
 
 /**
+  * 深圳通卡记录
+  * @param cardCode 卡号
+  * @param cardTime 刷卡时间
+  * @param tradeType 交易类型
+  * @param trulyTradeValue 真实交易金额
+  * @param terminalCode 终端编码
+  * @param routeName 线路名称
+  * @param siteName 站点名称
+  */
+case class SztRecord (cardCode: String, cardTime: String, tradeType: String, trulyTradeValue: Double,
+                      terminalCode: String, routeName: String, siteName: String)
+
+/**
+  * 时间站点聚合的组
+  * @param timeSite 时间站点组成的时间
+  * @param count 同一站点统一时间打卡的人数
+  */
+case class timeSiteCount(timeSite: String, count: Int)
+
+/**
+  * 注册类，实现数据的kryo序列化，数据减少后相对传统的java序列化后的数据大小减少3-5倍
+  */
+class MyRegistrator extends KryoRegistrator {
+    override def registerClasses(kryo: Kryo) {
+        kryo.register(classOf[SztRecord])
+        kryo.register(classOf[CarFreeDay])
+        kryo.register(classOf[timeSiteCount])
+    }
+}
+
+/**
   * 无车日系统后台数据计算，计算深圳通乘客年度刷卡记录
   * Created by wing1995 on 2017/8/16.
   */
-object CarFreeDayAPP extends Serializable{
+class CarFreeDay extends Serializable{
 
-    val stationMap = new mutable.HashMap[String, String]() //存放站点ID对应的站点名称
-    val timeSiteHashMap = new mutable.HashMap[String, Int]() //由站点和时间组成key，得到相同时间相同站点打卡的人数
-
-    private def getStationMap(spark: SparkSession, staticMetroPath: String): Unit = {
-
+    /**
+      * 获取站点ID对应站点名称的map，并广播到小表到各个节点
+      * @param spark SparkSession
+      * @param staticMetroPath 静态表路径
+      * @return bStationMap
+      */
+    private def getStationMap(spark: SparkSession, staticMetroPath: String): Broadcast[Map[String, String]] = {
+        import spark.implicits._
         val ds = spark.read.textFile(staticMetroPath)
-        ds.foreach(line => {
+        val stationMap = ds.map(line => {
             //System.out.println(line)
             val lineArr = line.split(",")
-            stationMap.+=((lineArr(0), lineArr(1)))
-        })
+            (lineArr(0), lineArr(1))})
+            .collect()
+            .groupBy(row => row._1)
+            .map(group => (group._1, group._2.head._2))
 
+        val bStationMap = spark.sparkContext.broadcast(stationMap)
+        bStationMap
     }
 
+    /**
+      * 获取原始数据
+      * @param spark SparkSession
+      * @param oldDataPath 2017年5月7日之前的数据
+      * @param newDataPath 2017年5月7日以后的数据
+      * @return df
+      */
     private def getData(spark: SparkSession, oldDataPath: String, newDataPath: String): DataFrame = {
 
         //读取GBK编码的文件之方式一
@@ -74,13 +118,11 @@ object CarFreeDayAPP extends Serializable{
                 val cardTime = recordArr(8)
                 val tradeType = recordArr(4)
                 val trulyTradeValue = recordArr(6).toDouble / 100 //实际交易值
-                val tradeValue = recordArr(5).toDouble / 100 //旅程花费
                 val terminalCode = recordArr(2)
                 val routeName = recordArr(12)
                 val siteName = recordArr(13)
-                val carId = recordArr(14)
-                (cardCode, cardTime, tradeType, trulyTradeValue, tradeValue, terminalCode, routeName, siteName, carId)
-            }).toDF("cardCode", "cardTime", "tradeType", "trulyTradeValue", "tradValue", "terminalCode", "routeName", "siteName", "carId")
+                SztRecord(cardCode, cardTime, tradeType, trulyTradeValue, terminalCode, routeName, siteName)
+            }).toDF()
 
         //读取GBK编码的csv文件之方式二
         val newData = spark.read
@@ -97,20 +139,24 @@ object CarFreeDayAPP extends Serializable{
                 val cardTime = TimeUtils.apply.stamp2time(TimeUtils.apply.time2stamp(row.getString(1), "yyyyMMddHHmmss"), "yyyy-MM-dd HH:mm:ss")
                 val tradeType = row.getString(2)
                 val trulyTradeValue = row.getString(3).toDouble / 100 //实际交易值
-                val tradeValue = row.getString(4).toDouble / 100 //旅程花费
                 val terminalCode = row.getString(5)
                 val routeName = row.getString(6)
                 val siteName = row.getString(7)
-                val carId = row.getString(8)
-                (cardCode, cardTime, tradeType, trulyTradeValue, tradeValue, terminalCode, routeName, siteName, carId)
-            }).toDF("cardCode", "cardTime", "tradeType", "trulyTradeValue", "tradValue", "terminalCode", "routeName", "siteName", "carId")
+                SztRecord(cardCode, cardTime, tradeType, trulyTradeValue, terminalCode, routeName, siteName)
+            }).toDF()
 
         val df = oldDf.union(newDf)
 
         df
     }
 
-    def carFreeDay(df: DataFrame): DataFrame = {
+    /**
+      * 计算每个乘客的相关数据
+      * @param df 一年的数据
+      * @param bStationMap 广播的站点数据
+      * @return resultData
+      */
+    def carFreeDay(df: DataFrame, bStationMap: Broadcast[Map[String, String]]): DataFrame = {
 
         import df.sparkSession.implicits._
 
@@ -118,25 +164,31 @@ object CarFreeDayAPP extends Serializable{
         val cleanData = DataClean.apply(df).addDate().toDF
         //对地铁数据做补全站点处理
         val newData = cleanData.map(row => {
-            val siteId = row.getString(row.fieldIndex("terminalCode"))
+            val siteId = row.getString(row.fieldIndex("terminalCode")).substring(0, 6)
             val flag = siteId.matches("2[46].*")
             var siteName = row.getString(row.fieldIndex("siteName"))
+
             if (flag) {
-                siteName = stationMap.getOrElse(siteId, siteName)
+                siteName = bStationMap.value.getOrElse(siteId, siteName)
             }
             (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), siteName, row.getString(row.fieldIndex("date")))
         })
             .toDF("cardCode", "cardTime", "trulyTradeValue", "terminalCode", "siteName", "date")
-            .cache()
+//            .coalesce(4000)
 
-        //得到相同分钟和站点打卡的记录组合的map
-        newData.distinct()
+//        cleanData.unpersist()
+        //得到相同分钟和站点打卡的记录组合的map，并广播到各个节点
+        val timeSiteMap = newData
+            .filter(row => row.getString(row.fieldIndex("terminalCode")).substring(0, 6).matches("2[46].*"))
             .groupByKey(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")))
-            .count()
-            .toDF("timeSite", "count")
-            .foreach(row => timeSiteHashMap.+=((row.getString(0), row.getLong(1).toInt)))
+            .mapGroups((key, value) => timeSiteCount(key, value.length))
+            .collect()
 
-        val resultData = newData.distinct()
+        val timeSiteBroadData = df.sparkSession.sparkContext.broadcast(timeSiteMap)
+
+//        timeSiteMap = null
+
+        val resultData = newData
             .groupByKey(row => row.getString(row.fieldIndex("cardCode"))) //根据卡号分组对每一个卡号做组内计算
             .mapGroups((key, iter) => {
 
@@ -174,12 +226,14 @@ object CarFreeDayAPP extends Serializable{
 
             var largestNumberPeople = 0 //同一时刻同一个地铁站刷卡时遇到的最多人数
             //得到该卡号对应的刷卡站点和刷卡时间组成的对
-            val keyValuePairs = metroRecords.map(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")))
-            //获得所有记录中刷卡站点和刷卡时间组成的对，并将其与每张卡产生的个人记录中的每一次刷卡站点和刷卡时间组成的字符串对进行匹配，相同的话就是与持卡人同一站点同一时间进出，并找出最大值
-            keyValuePairs.foreach(eachKeyValuePair => {
-                val meetPeople = timeSiteHashMap.getOrElse(eachKeyValuePair, 0) - 1
-                if(meetPeople > largestNumberPeople) largestNumberPeople = meetPeople
-            })
+            if(metroCount != 0) {
+                val keyValuePairs = metroRecords.map(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")))
+                //获得所有记录中刷卡站点和刷卡时间组成的对，并将其与每张卡产生的个人记录中的每一次刷卡站点和刷卡时间组成的字符串对进行匹配，相同的话就是与持卡人同一站点同一时间进出，并找出最大值
+                keyValuePairs.foreach(eachKeyValuePair => {
+                    val meetPeople = timeSiteBroadData.value.filter(_.timeSite.equals(eachKeyValuePair)).head.count - 1
+                    if(meetPeople > largestNumberPeople) largestNumberPeople = meetPeople
+                })
+            }
 
             var mostExpensiveTrip = 0.0 //最昂贵的旅程花费
             mostExpensiveTrip = records.maxBy(row => row.getDouble(row.fieldIndex("trulyTradeValue"))).getDouble(2)
@@ -212,8 +266,8 @@ object CarFreeDayAPP extends Serializable{
                     val sortedArr = group._2.sortBy(row => row.getString(row.fieldIndex("cardTime")))
                     val earliestOutTime = sortedArr.head.getString(1).split(" ")(1)
                     val latestGoHomeTime = sortedArr.last.getString(1).split(" ")(1)
-                    if (earliestOutTime <= "09:00:00" && latestGoHomeTime >= "20:00:00") workingDays += 1
-                    else if (earliestOutTime >= "09:00:00" && latestGoHomeTime <= "20:00:00") restDays += 1
+                    if (earliestOutTime <= "09:30:00" && latestGoHomeTime >= "20:00:00") workingDays += 1
+                    else if (earliestOutTime >= "09:00:00" && latestGoHomeTime <= "18:00:00") restDays += 1
                 })
 
             var reducedCarbonEmission = 0.0 //碳排放
@@ -279,6 +333,11 @@ object CarFreeDayAPP extends Serializable{
 
         rows.foreach(insertRow(_, stmt))
     }
+}
+
+object CarFreeDay{
+
+    def apply: CarFreeDay = new CarFreeDay()
 
     def main(args: Array[String]): Unit = {
 
@@ -291,17 +350,29 @@ object CarFreeDayAPP extends Serializable{
             staticMetroPath = args(2)
         } else System.out.println("使用默认的参数配置")
 
-        //val spark = SparkSession.builder().appName("CarFreeDayAPP").getOrCreate()
-        val spark = SparkSession.builder().appName("CarFreeDayAPP").master("local[4]").config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my").getOrCreate()
+        val spark = SparkSession.builder()
+                    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+                    .config("spark.kryo.registrator", "cn.sibat.metro.MyRegistrator")
+                    .config("spark.rdd.compress", "true")
+                    .getOrCreate()
 
-        getStationMap(spark, staticMetroPath)
+//        val spark = SparkSession.builder()
+//            .appName("CarFreeDayAPP")
+//            .master("local[3]")
+//            .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
+//            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+//            .config("spark.kryo.registrator", "cn.sibat.metro.MyRegistrator")
+//            .config("spark.rdd.compress", "true")
+//            .getOrCreate()
 
-        val df = getData(spark, oldDataPath, newDataPath)
+        val bStationMap = CarFreeDay.apply.getStationMap(spark, staticMetroPath)
 
-        val result = carFreeDay(df)
+        val df = CarFreeDay.apply.getData(spark, oldDataPath, newDataPath)
+
+        val result = CarFreeDay.apply.carFreeDay(df, bStationMap)
 
         result.show(50)
-        //result.repartition(5).foreachPartition(rows => saveToPostgres(rows))
+//        result.repartition(1000).foreachPartition(rows => saveToPostgres(rows))
 
         spark.stop()
     }
