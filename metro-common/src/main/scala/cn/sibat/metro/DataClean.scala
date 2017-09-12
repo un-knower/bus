@@ -9,6 +9,7 @@ import org.apache.spark.sql.functions.{col, _}
   * Created by wing1995 on 2017/5/4.
   */
 class DataClean (val data: DataFrame) {
+    import data.sparkSession.implicits._
 
   /**
     * 将清洗完的数据返回
@@ -48,14 +49,18 @@ class DataClean (val data: DataFrame) {
     * @param dataStation 静态地铁站点数据
     * @return 原对象DataCleanUtils
     */
-  def recoveryData(dataStation: Broadcast[DataFrame]): DataClean = {
-    val siteIdCol = udf { (terminalCode: String) => terminalCode.slice(0, 6) }
-    val tmpData = this.data.withColumn("siteId", siteIdCol(col("terminalCode")))
-    var recoveryData = tmpData.join(dataStation.value, Seq("siteId"))
-    recoveryData = recoveryData.withColumn("siteName", when(col("siteName").equalTo("siteNameStatic"), col("siteName")).otherwise(col("siteNameStatic")))
-      .withColumn("routeName", when(col("routeName").equalTo(col("routeNameStatic")), col("routeName")).otherwise(col("routeNameStatic")))
-      //.select("cardCode", "terminalCode", "transType", "cardTime", "routeName", "siteName", "GateMark", "date")
-    newUtils(recoveryData)
+  def recoveryData(dataStation: Broadcast[Map[String, String]]): DataClean = {
+    val newData = this.data.map(row => {
+      val siteId = row.getString(row.fieldIndex("terminalCode")).substring(0, 6)
+      val flag = siteId.matches("2[46].*")
+      var siteName = row.getString(row.fieldIndex("siteName"))
+
+      if (flag) {
+        siteName = dataStation.value.getOrElse(siteId, siteName)
+      }
+      (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), siteName, row.getString(row.fieldIndex("date")))
+    }).toDF("cardCode", "cardTime", "trulyTradeValue", "terminalCode", "siteName", "date")
+    newUtils(newData)
   }
 }
 
