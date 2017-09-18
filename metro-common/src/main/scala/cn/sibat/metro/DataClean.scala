@@ -43,7 +43,7 @@ class DataClean (val data: DataFrame) {
   }
 
   /**
-    * 针对地铁数据
+    * 针对地铁数据做站点和地铁线路补全
     * 根据站点ID唯一对应站点名称，利用站点ID补全站点名称为“None”的字段，统一所有站点名称
     * 根据站点ID唯一确定路线名称，利用站点ID修正路线名称错误的字段
     * @param dataStation 静态地铁站点数据
@@ -58,8 +58,8 @@ class DataClean (val data: DataFrame) {
       if (flag) {
         siteName = dataStation.value.getOrElse(siteId, siteName)
       }
-      (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), siteName, row.getString(row.fieldIndex("date")))
-    }).toDF("cardCode", "cardTime", "trulyTradeValue", "terminalCode", "siteName", "date")
+      (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getString(row.fieldIndex("tradeType")),  row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), row.getString(row.fieldIndex("routeName")), siteName, row.getString(row.fieldIndex("date")))
+    }).toDF("cardCode", "cardTime", "tradeType", "trulyTradeValue", "terminalCode", "routeName", "siteName", "date")
     newUtils(newData)
   }
 }

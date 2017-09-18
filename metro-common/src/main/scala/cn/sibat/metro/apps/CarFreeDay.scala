@@ -1,4 +1,4 @@
-package cn.sibat.metro
+package cn.sibat.metro.apps
 
 import java.io._
 import java.sql.{DriverManager, PreparedStatement}
@@ -13,7 +13,8 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.functions.{col, _}
 
 import scala.language.postfixOps
-import utils.TimeUtils
+import cn.sibat.metro.utils.TimeUtils
+import cn.sibat.metro._
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -38,6 +39,23 @@ case class CardRecord(cardId: String, count: Int, earliestOutTime: String, frequ
                       mostExpensiveTrip: Double, workingDays: Int, reducedCarbonEmission: Double, restDays: Int,
                       tradeAmount: Double, stationsHasBeen: Array[String])
 
+/**
+  * 绿色出行入库数据
+  * @param cardId 卡号
+  * @param count 出行次数
+  * @param earliestOutTime 最早的出门时间
+  * @param frequentBusLine 乘坐最频繁的公交线路
+  * @param frequentSubwayStation 乘坐最频繁的地铁站点
+  * @param largestNumberPeople 同一时间同一站点打卡人数
+  * @param latestGoHomeTime 最晚回家时间
+  * @param mostExpensiveTrip 最贵的一次旅程花费
+  * @param workingDays 加班天数
+  * @param reducedCarbonEmission 减少的碳排放
+  * @param restDays 休息天数
+  * @param tradeAmount 乘车交易额总计
+  * @param stationNumNotBeen 没有去过的地铁站点数目
+  * @param awardRank 等级
+  */
 case class CardRecord1(cardId: String, count: Int, earliestOutTime: String, frequentBusLine: String, frequentSubwayStation: String,
                        largestNumberPeople: Int, latestGoHomeTime: String,
                        mostExpensiveTrip: Double, workingDays: Int, reducedCarbonEmission: Double, restDays: Int,
@@ -113,7 +131,7 @@ class CarFreeDay extends Serializable {
       * @param newDataPath 2017年5月7日以后的数据
       * @return df
       */
-    private def getData(spark: SparkSession, oldDataPath: String, newDataPath: String): DataFrame = {
+    def getData(spark: SparkSession, oldDataPath: String, newDataPath: String): DataFrame = {
 
         //读取GBK编码的文件之方式一
         //val sparkConf = new SparkConf().setMaster("local[*]").setAppName("CarFreeDayAPP")
@@ -533,12 +551,6 @@ object CarFreeDay {
             newDataPath = args(1)
             staticMetroPath = args(2)
         } else System.out.println("使用默认的参数配置")
-
-        //        val spark = SparkSession.builder()
-        //                    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        //                    .config("spark.kryo.registrator", "cn.sibat.metro.MyRegistrator")
-        //                    .config("spark.rdd.compress", "true")
-        //                    .getOrCreate()
 
         val spark = SparkSession.builder()
             .appName("CarFreeDayAPP")

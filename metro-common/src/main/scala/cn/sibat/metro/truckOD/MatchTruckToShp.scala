@@ -115,7 +115,11 @@ object MatchTruckToShp {
 
     def main(args: Array[String]) {
 
-        val spark = SparkSession.builder().appName("TruckApp").master("local[*]").config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my").getOrCreate()
+        val spark = SparkSession.builder()
+          .appName("TruckApp")
+          .master("local[*]")
+          .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
+          .getOrCreate()
         val metadata = spark.read.textFile("E:\\trafficDataAnalysis\\testData\\truckData\\part-r-00000")
         val savePath = "E:\\货车OD\\tables"
         withZoneId(metadata, savePath)
