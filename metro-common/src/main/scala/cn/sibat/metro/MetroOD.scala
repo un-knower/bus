@@ -11,7 +11,20 @@ import scala.collection.mutable.ArrayBuffer
   * 地铁乘客OD计算
   * Created by wing1995 on 2017/5/10.
   */
-class MetroOD extends Serializable {
+class MetroOD(df: DataFrame) extends Serializable {
+  /**
+    * 将清洗完的数据返回
+    * @return DataFrame
+    */
+  def toDF: DataFrame = this.df
+
+  /**
+    * 构造伴生对象，返回对象本身，实现链式写法
+    * @param df 清洗后的DataFrame
+    * @return 原对象 DataClean
+    */
+  private def newUtils(df: DataFrame): MetroOD = new MetroOD(df)
+
   /**
     * 将乘客的相邻两个刷卡记录两两合并为一条字符串格式的OD记录
     *
@@ -32,10 +45,9 @@ class MetroOD extends Serializable {
     * 乘客OD信息的生成
     * 根据刷卡卡号进行分组，将每位乘客的OD信息转换为数组，按刷卡时间排序，
     * 将排序好的数组转换为逗号分隔的字符串，最后将字符串两两合并生成乘客OD信息
-    * @param df 地铁刷卡的记录
     * @return
     */
-  def calMetroOD(df: DataFrame): DataFrame = {
+  def calMetroOD: MetroOD = {
     import df.sparkSession.implicits._
     val mergedData = df.groupByKey(row => row.getString(row.fieldIndex("cardCode")) + ',' + row.getString(row.fieldIndex("date")))
       .flatMapGroups((_, records) => {
@@ -44,26 +56,27 @@ class MetroOD extends Serializable {
         mergedOD
       })
     val filteredData = mergedData.map(_.split(",")).filter(arr => arr(2)=="21" && arr(10) == "22")
-    filteredData.map(arr => OD(arr(0), arr(1), arr(4), arr(5), arr(6), arr(9), arr(11).toDouble, arr(12), arr(13), arr(14), arr(15))).toDF()
+    val mergedResult = filteredData.map(arr => OD(arr(0), arr(1), arr(4), arr(5), arr(6), arr(9), arr(11).toDouble, arr(12), arr(13), arr(14), arr(15))).toDF()
+    newUtils(mergedResult)
   }
 
   /**
-    * 生成进站与出站的时间差列，保留出时间差小于３小时以及出入站点不同的记录
-    * @param df 由乘客刷卡生成的OD数据构成的DataFrame
+    * 添加过滤条件
+    * 生成进站与出站的时间差列，保留出时间差小于3小时以及出入站点不同的记录
     * @return
     */
-  def getTimeDiff(df: DataFrame): DataFrame = {
+  def filteredRule: MetroOD = {
     val timeUtils = new TimeUtils
     val timeDiffUDF = udf((startTime: String, endTime: String) => timeUtils.calTimeDiff(startTime, endTime))
     val ODsCalTimeDiff = df.withColumn("timeDiff", timeDiffUDF(col("cardTime"), col("outCardTime")))
     val timeLessThan3 = ODsCalTimeDiff.filter(col("timeDiff") < 3)
     val inNotEqualToOut = timeLessThan3.filter(col("siteName") =!= col("outSiteName"))
-    inNotEqualToOut
+    newUtils(inNotEqualToOut)
   }
 }
 
 object MetroOD {
-  def apply: MetroOD = new MetroOD()
+  def apply(df: DataFrame): MetroOD = new MetroOD(df)
 
   def main(args: Array[String]): Unit = {
     var oldDataPath = "/user/wuying/SZT_original/oldData"
@@ -81,11 +94,13 @@ object MetroOD {
       .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
       .getOrCreate()
 
-    val oldDf = DataFormat.apply().getOldData(spark, oldDataPath)
-    val newDf = DataFormat.apply().getNewData(spark, newDataPath)
-    val bStationMap = DataFormat.apply().getStationMap(spark, staticMetroPath)
+    val oldDf = DataFormat.apply(spark).getOldData(oldDataPath)
+    val newDf = DataFormat.apply(spark).getNewData(newDataPath)
+    val bStationMap = DataFormat.apply(spark).getStationMap(staticMetroPath)
     val df = oldDf.union(newDf).distinct()
-    val cleanDf = DataClean.apply(df).addDate().recoveryData(bStationMap)
+    val cleanDf = DataClean.apply(df).addDate().recoveryData(bStationMap).toDF
+    val resultDf = MetroOD.apply(cleanDf).calMetroOD.filteredRule.toDF
+    resultDf.show()
   }
 }
 

@@ -21,13 +21,13 @@ class MyRegistrator extends KryoRegistrator {
   * 将默认数据类型转换为业务所需的数据视图，筛选需要的字段，以及数据类型格式化
   * Created by wing1995 on 2017/5/4.
   */
-class DataFormat {
+class DataFormat(spark: SparkSession) {
   /**
     * 获取旧数据，并解析数据成标准格式
     * @param oldDataPath 旧数据地址
     * @return oldDf
     */
-  def getOldData(spark: SparkSession, oldDataPath: String): DataFrame = {
+  def getOldData(oldDataPath: String): DataFrame = {
     import spark.implicits._
     //读取深圳通旧数据（—2017.05.06）
     val oldData = spark.read.textFile(oldDataPath)
@@ -47,7 +47,12 @@ class DataFormat {
     oldDf
   }
 
-  def getNewData(spark: SparkSession, newDataPath: String): DataFrame = {
+  /**
+    * 获取新数据
+    * @param newDataPath 新数据地址
+    * @return newDf
+    */
+  def getNewData(newDataPath: String): DataFrame = {
     //读取GBK编码的csv文件，新数据（2017.05.07—）
     val newData = spark.read
       .format("csv")
@@ -81,11 +86,10 @@ class DataFormat {
   /**
     * 获取站点ID对应站点名称的map，并广播到小表到各个节点
     *
-    * @param spark           SparkSession
     * @param staticMetroPath 静态表路径
     * @return bStationMap
     */
-  def getStationMap(spark: SparkSession, staticMetroPath: String): Broadcast[Map[String, String]] = {
+  def getStationMap(staticMetroPath: String): Broadcast[Map[String, String]] = {
     import spark.implicits._
     val ds = spark.read.textFile(staticMetroPath)
     val stationMap = ds.map(line => {
@@ -117,5 +121,5 @@ case class SztRecord(cardCode: String, cardTime: String, tradeType: String, trul
                      terminalCode: String, routeName: String, siteName: String)
 
 object DataFormat{
-  def apply(): DataFormat = new DataFormat()
+  def apply(spark: SparkSession): DataFormat = new DataFormat(spark)
 }
