@@ -1,7 +1,10 @@
 package cn.sibat.metro
 
-import cn.sibat.metro.utils.TimeUtils
+import java.sql.DriverManager
 
+import cn.sibat.metro.utils.TimeUtils
+import com.esotericsoftware.kryo.Kryo
+import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.functions.{col, _}
 
@@ -69,39 +72,55 @@ class MetroOD(df: DataFrame) extends Serializable {
     val timeUtils = new TimeUtils
     val timeDiffUDF = udf((startTime: String, endTime: String) => timeUtils.calTimeDiff(startTime, endTime))
     val ODsCalTimeDiff = df.withColumn("timeDiff", timeDiffUDF(col("cardTime"), col("outCardTime")))
-    val timeLessThan3 = ODsCalTimeDiff.filter(col("timeDiff") < 3)
+    val timeLessThan3 = ODsCalTimeDiff.filter(col("timeDiff") < 3 * 60)
     val inNotEqualToOut = timeLessThan3.filter(col("siteName") =!= col("outSiteName"))
     newUtils(inNotEqualToOut)
   }
 }
 
+/**
+  * 注册类，实现数据的kryo序列化，数据减少后相对传统的java序列化后的数据大小减少3-5倍
+  */
+class MetroODRegistrator extends KryoRegistrator {
+    override def registerClasses(kryo: Kryo) {
+        kryo.register(classOf[SztRecord])
+        kryo.register(classOf[OD])
+    }
+}
+
 object MetroOD {
-  def apply(df: DataFrame): MetroOD = new MetroOD(df)
+    def apply(df: DataFrame): MetroOD = new MetroOD(df)
 
-  def main(args: Array[String]): Unit = {
-    var oldDataPath = "/user/wuying/SZT_original/oldData"
-    var newDataPath = "/user/wuying/SZT_original/newData"
-    var staticMetroPath = "/user/wuying/metroInfo/subway_station"
-    if (args.length == 3) {
-      oldDataPath = args(0)
-      newDataPath = args(1)
-      staticMetroPath = args(2)
-    } else System.out.println("使用默认的参数配置")
+    def main(args: Array[String]): Unit = {
+        var oldDataPath = "/user/wuying/SZT_original/oldData"
+        var newDataPath = "/user/wuying/SZT_original/newData"
+        var staticMetroPath = "/user/wuying/metroInfo/subway_station"
+        if (args.length == 3) {
+          oldDataPath = args(0)
+          newDataPath = args(1)
+          staticMetroPath = args(2)
+        } else System.out.println("使用默认的参数配置")
 
-    val spark = SparkSession.builder()
-      .appName("CarFreeDayAPP")
-      .master("local[3]")
-      .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
-      .getOrCreate()
+        val spark = SparkSession.builder()
+            .appName("metroOD")
+    //        .master("local[3]")
+    //        .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.kryo.registrator", "cn.sibat.metro.MetroODRegistrator")
+            .config("spark.rdd.compress", "true")
+            .getOrCreate()
 
-    val oldDf = DataFormat.apply(spark).getOldData(oldDataPath)
-    val newDf = DataFormat.apply(spark).getNewData(newDataPath)
-    val bStationMap = DataFormat.apply(spark).getStationMap(staticMetroPath)
-    val df = oldDf.union(newDf).distinct()
-    val cleanDf = DataClean.apply(df).addDate().recoveryData(bStationMap).toDF
-    val resultDf = MetroOD.apply(cleanDf).calMetroOD.filteredRule.toDF
-    resultDf.show()
-  }
+        import spark.implicits._
+
+        val oldDf = DataFormat.apply(spark).getOldData(oldDataPath)
+        val newDf = DataFormat.apply(spark).getNewData(newDataPath)
+        val bStationMap = DataFormat.apply(spark).getStationMap(staticMetroPath)
+        val df = oldDf.union(newDf).distinct()
+        val cleanDf = DataClean.apply(df).addDate().recoveryData(bStationMap).toDF
+        val resultDf = MetroOD.apply(cleanDf).calMetroOD.filteredRule.toDF
+        resultDf.select("cardCode", "timeDiff").groupBy(col("cardCode")).agg(max(col("timeDiff")) as "longestTripTime").map(_.mkString(",")).repartition(1).rdd.saveAsTextFile("longestTripTime")
+        spark.stop()
+    }
 }
 
 /**
