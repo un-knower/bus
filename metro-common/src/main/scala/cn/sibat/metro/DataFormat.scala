@@ -22,6 +22,7 @@ class MyRegistrator extends KryoRegistrator {
   * Created by wing1995 on 2017/5/4.
   */
 class DataFormat(spark: SparkSession) {
+  import spark.implicits._
   /**
     * 获取旧数据，并解析数据成标准格式
     * @param oldDataPath 旧数据地址
