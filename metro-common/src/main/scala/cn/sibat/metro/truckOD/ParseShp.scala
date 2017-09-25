@@ -4,7 +4,6 @@ import java.io.File
 import java.nio.charset.Charset
 
 import com.vividsolutions.jts.geom.{Coordinate, MultiPolygon}
-import org.apache.spark.sql.{Dataset, SparkSession}
 
 import org.geotools.data.FeatureSource
 import org.geotools.data.shapefile.ShapefileDataStore
@@ -15,21 +14,21 @@ import org.opengis.feature.simple.{SimpleFeature, SimpleFeatureType}
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * 卡车的OD匹配，找出区域内的起始点或者出发点，匹配OD到固定范围
+  * OD匹配，找出区域内的起始点或者出发点，匹配OD到固定范围
   * Created by wing1995 on 2017/9/11.
   */
-object MatchTruckToShp {
+object ParseShp {
 
-    //货车数据分析范围
-    private var POLYGON: Array[(MultiPolygon, String)] = _
+    //区域分析范围：Array(区域，区域ID或Name)
+    private var POLYGON:  Array[(MultiPolygon, String)] = _
 
     /**
-      * 加载货车区域shp文件
+      * 加载货车区域shp文件并将区域信息存储到数组POLYGON
       *
-      * @param path 文件路径
+      * @param shpPath shp文件路径
       */
-    def read(path: String): Unit = {
-        val file = new File(path)
+    def read(shpPath: String): Unit = {
+        val file = new File(shpPath)
         var shpDataStore: ShapefileDataStore = null
         try {
             shpDataStore = new ShapefileDataStore(file.toURI.toURL)
@@ -55,12 +54,17 @@ object MatchTruckToShp {
         }
         val iterator: FeatureIterator[SimpleFeature] = result.features
         val resultPolygon = new ArrayBuffer[MultiPolygon]()
-        val id = new ArrayBuffer[String]()
+        val zoneName = new ArrayBuffer[String]()
         try {
             //将所有的polygon都放入数组中
             while (iterator.hasNext) {
                 val sf = iterator.next()
-                id += sf.getID
+                val attributeName = shpPath match {
+                    case "交通小区.shp" => sf.getAttribute(shpPath).toString
+                    case "街道2017.shp" => sf.getAttribute(shpPath).toString
+                    case "行政区2017.shp" => sf.getAttribute(shpPath).toString
+                }
+                zoneName += attributeName
                 val multiPolygon = sf.getDefaultGeometry.asInstanceOf[MultiPolygon]
                 resultPolygon += multiPolygon
             }
@@ -70,18 +74,17 @@ object MatchTruckToShp {
             iterator.close()
             shpDataStore.dispose()
         }
-        POLYGON = resultPolygon.toArray.zip(id.toIterable)
+        POLYGON = resultPolygon.toArray.zip(zoneName)
     }
 
     /**
-      * 过去经纬度所在的交通小区的zoneId
-      * 超出深圳为null
-      *
+      * 获取经纬度所在的区域名称
+      * 若都不在该shp文件的范围内则为null
       * @param lon 经度
       * @param lat 纬度
-      * @return zoneId
+      * @return zoneId 当前经纬点所在的区域ID
       */
-    def zoneId(lon: Double, lat: Double): String = {
+    def getZoneName(lon: Double, lat: Double): String = {
         var result = "null"
         val geometryFactory = JTSFactoryFinder.getGeometryFactory()
         val coord = new Coordinate(lon, lat)
@@ -93,41 +96,14 @@ object MatchTruckToShp {
         result
     }
 
-    /**
-      * 把OD数据的起点和终点转化成交通小区编号
-      *
-      * @param metadata OD数据
-      */
-    def withZoneId(metadata: Dataset[String], savePath: String): Unit = {
-        read("E:\\货车OD\\货车分析范围\\货车分析范围.shp")
-        import metadata.sparkSession.implicits._
-        metadata.map(s => {
-            val split = s.split(",")
-            val o_lon = split(1).toDouble
-            val o_lat = split(2).toDouble
-            val d_lon = split(3).toDouble
-            val d_lat = split(4).toDouble
-            val o_type = zoneId(o_lon, o_lat)
-            val d_type = zoneId(d_lon, d_lat)
-            s + "," + o_type + "," + d_type
-        }).rdd.sortBy(s => s.split(",")(1) + "," + s.split(",")(2)).repartition(1).saveAsTextFile(savePath)
-    }
-
     def main(args: Array[String]) {
 
-        val spark = SparkSession.builder()
-          .appName("TruckApp")
-          .master("local[*]")
-          .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
-          .getOrCreate()
-        val metadata = spark.read.textFile("E:\\trafficDataAnalysis\\testData\\truckData\\part-r-00000")
-        val savePath = "E:\\货车OD\\tables"
-        withZoneId(metadata, savePath)
-//        read("E:\\货车OD\\货车分析范围\\货车分析范围.shp")
-//        val result = zoneId(113.88291410519841,22.499375871322698)
-//        POLYGON.foreach(println)
-//        println(result)
+        val shpPath = "行政区2017.shp" //不同等级下划分的区域shp文件
+
+        read(shpPath)
+        val result = getZoneName(113.868,22.711)
+        println(result)
     }
 }
 
-case class TruckOD(cardId: String, departLon: Double, departLat: Double, arrivalLon: Double, arrivalLat: Double)
+
