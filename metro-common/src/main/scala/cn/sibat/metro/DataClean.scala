@@ -24,6 +24,10 @@ class DataClean (val data: DataFrame) {
     */
   private def newUtils(df: DataFrame): DataClean = new DataClean(df)
 
+//  def errTime(): DataClean = {
+//     注意新的数据中有部分设备出错，例如20170731的二号线上的地铁入站打卡日期都是20110701，后面再做判断
+//  }
+
   /**
     * 针对深圳通原始数据，添加日期列
     * 将深圳通数据文件中的打卡时间为每天的4：00到次日4：00的记录记为当日日期，4:00之前的日期指定为前一天的日期
@@ -49,14 +53,14 @@ class DataClean (val data: DataFrame) {
     * @param dataStation 静态地铁站点数据
     * @return 原对象DataCleanUtils
     */
-  def recoveryData(dataStation: Broadcast[Map[String, String]]): DataClean = {
+  def recoveryData(dataStation: Broadcast[Map[String, Array[(String, String, String, String)]]]): DataClean = {
     val newData = this.data.map(row => {
       val siteId = row.getString(row.fieldIndex("terminalCode")).substring(0, 6)
       val flag = siteId.matches("2[46].*")
       var siteName = row.getString(row.fieldIndex("siteName"))
 
       if (flag) {
-        siteName = dataStation.value.getOrElse(siteId, siteName)
+        siteName = dataStation.value.getOrElse(siteId, Array()).head._2
       }
       (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getString(row.fieldIndex("tradeType")),  row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), row.getString(row.fieldIndex("routeName")), siteName, row.getString(row.fieldIndex("date")))
     }).toDF("cardCode", "cardTime", "tradeType", "trulyTradeValue", "terminalCode", "routeName", "siteName", "date")

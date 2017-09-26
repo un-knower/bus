@@ -88,19 +88,18 @@ class DataFormat(spark: SparkSession) {
     * 获取站点ID对应站点名称的map，并广播到小表到各个节点
     *
     * @param staticMetroPath 静态表路径
-    * @return bStationMap
+    * @return bStationMap 以站点ID为key的站点名称，经纬度信息
     */
-  def getStationMap(staticMetroPath: String): Broadcast[Map[String, String]] = {
+  def getStationMap(staticMetroPath: String): Broadcast[Map[String, Array[(String, String, String, String)]]] = {
     import spark.implicits._
     val ds = spark.read.textFile(staticMetroPath)
     val stationMap = ds.map(line => {
       //System.out.println(line)
       val lineArr = line.split(",")
-      (lineArr(0), lineArr(1))
+      (lineArr(0), lineArr(1), lineArr(5), lineArr(4))
     })
       .collect()
       .groupBy(row => row._1)
-      .map(grouped => (grouped._1, grouped._2.head._2))
 
     val bStationMap = spark.sparkContext.broadcast(stationMap)
     bStationMap

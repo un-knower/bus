@@ -28,11 +28,11 @@ object CheckSztData {
             .config("spark.rdd.compress", "true")
             .getOrCreate()
         import spark.implicits._
-        val cardCode1 = "665323564"
-        val cardCode2 = "684448326"
+        val cardCode1 = "330179182"
+//        val cardCode2 = "684448326"
         CarFreeDay.apply.getData(spark, oldDataPath, newDataPath)
-            .filter(col("cardCode")===cardCode1 or col("cardCode")===cardCode2)
-            .filter(row => row.getString(row.fieldIndex("terminalCode")).matches("2[235].*"))
+            .filter(col("cardCode")===cardCode1)
+//            .filter(row => row.getString(row.fieldIndex("terminalCode")).matches("2[235].*"))
             .map(_.mkString(","))
 //            .show()
             .repartition(1)

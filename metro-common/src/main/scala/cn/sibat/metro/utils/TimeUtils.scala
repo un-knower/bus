@@ -65,7 +65,7 @@ class TimeUtils extends Serializable{
     */
   def calTimeDiff(formerDate: String, olderDate: String): Float = {
     val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-    val timeDiff = (sdf.parse(olderDate).getTime - sdf.parse(formerDate).getTime) / (3600F * 1000F) //得到小时为单位
+    val timeDiff = (sdf.parse(olderDate).getTime - sdf.parse(formerDate).getTime) / (60F * 1000F) //得到小时为单位
     timeDiff
   }
 }

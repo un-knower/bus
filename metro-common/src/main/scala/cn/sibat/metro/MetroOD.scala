@@ -1,9 +1,8 @@
 package cn.sibat.metro
 
-import java.sql.DriverManager
-
 import cn.sibat.metro.utils.TimeUtils
 import com.esotericsoftware.kryo.Kryo
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.functions.{col, _}
@@ -15,6 +14,7 @@ import scala.collection.mutable.ArrayBuffer
   * Created by wing1995 on 2017/5/10.
   */
 class MetroOD(df: DataFrame) extends Serializable {
+    import this.df.sparkSession.implicits._
   /**
     * 将清洗完的数据返回
     * @return DataFrame
@@ -76,6 +76,26 @@ class MetroOD(df: DataFrame) extends Serializable {
     val inNotEqualToOut = timeLessThan3.filter(col("siteName") =!= col("outSiteName"))
     newUtils(inNotEqualToOut)
   }
+
+    /**
+      * 给站点名称添加经纬度（先给地铁处理）
+      * @param dataStation 带有站点经纬度信息的静态站点数据
+      * @return
+      */
+    def addLocation(dataStation: Broadcast[Map[String, Array[(String, String, String, String)]]]): MetroOD = {
+        val dataWithLocation = this.df.map(row => {
+            val inSiteId = row.getString(row.fieldIndex("terminalCode")).substring(0, 6)
+            val inSiteLon = dataStation.value.getOrElse(inSiteId, Array()).head._3.toDouble
+            val inSiteLat = dataStation.value.getOrElse(inSiteId, Array()).head._4.toDouble
+
+            val outSiteId = row.getString(row.fieldIndex("outTerminalCode")).substring(0, 6)
+            val outSiteLon = dataStation.value.getOrElse(outSiteId, Array()).head._3.toDouble
+            val outSiteLat = dataStation.value.getOrElse(outSiteId, Array()).head._4.toDouble
+
+            ODWithLocation(row.getString(row.fieldIndex("cardCode")), inSiteLon, inSiteLat, outSiteLon, outSiteLat, row.getString(row.fieldIndex("cardTime")), row.getString(row.fieldIndex("outCardTime")))
+        }).toDF()
+        newUtils(dataWithLocation)
+    }
 }
 
 /**
@@ -85,6 +105,7 @@ class MetroODRegistrator extends KryoRegistrator {
     override def registerClasses(kryo: Kryo) {
         kryo.register(classOf[SztRecord])
         kryo.register(classOf[OD])
+        kryo.register(classOf[ODWithLocation])
     }
 }
 
@@ -93,32 +114,51 @@ object MetroOD {
 
     def main(args: Array[String]): Unit = {
         var oldDataPath = "/user/wuying/SZT_original/oldData"
-        var newDataPath = "/user/wuying/SZT_original/newData"
-        var staticMetroPath = "/user/wuying/metroInfo/subway_station"
+        var newDataPath = "/user/wuying/SZT_original/newData/200_20170[6-8]*.csv"
+        var staticMetroPath = "/user/wuying/metroInfo/subway_station_GPS"
         if (args.length == 3) {
           oldDataPath = args(0)
           newDataPath = args(1)
           staticMetroPath = args(2)
+        } else if (args.length == 2) {
+            newDataPath = args(0)
+            staticMetroPath = args(1)
         } else System.out.println("使用默认的参数配置")
 
         val spark = SparkSession.builder()
             .appName("metroOD")
-    //        .master("local[3]")
-    //        .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
+//            .master("local[3]")
+//            .config("spark.sql.warehouse.dir", "file:///C:\\path\\to\\my")
             .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
             .config("spark.kryo.registrator", "cn.sibat.metro.MetroODRegistrator")
             .config("spark.rdd.compress", "true")
             .getOrCreate()
 
+        val BMUsers = Array(
+            "086540035", "665388436", "293345165", "327491360", "323555676",
+            "331357991", "684666554", "023041813", "328771992", "362774134",
+            "292335926", "660941532", "684043989", "361823600", "687307709",
+            "362756265", "667338104", "685844167", "362166709", "295587058",
+            "329813505", "684160474", "322193400", "684993919"
+        )
         import spark.implicits._
 
-        val oldDf = DataFormat.apply(spark).getOldData(oldDataPath)
-        val newDf = DataFormat.apply(spark).getNewData(newDataPath)
+//        val oldDf = DataFormat.apply(spark).getOldData(oldDataPath)
+        val newDf = DataFormat.apply(spark)
+            .getNewData(newDataPath)
+            .filter(row => {
+                val siteId = row.getString(row.fieldIndex("terminalCode")).substring(0, 6)
+                val cardCode = row.getString(row.fieldIndex("cardCode"))
+                BMUsers.contains(cardCode) && siteId.matches("2[46].*")
+             })
+        val dataStation = DataFormat.apply(spark).getStationMap(staticMetroPath)
         val bStationMap = DataFormat.apply(spark).getStationMap(staticMetroPath)
-        val df = oldDf.union(newDf).distinct()
-        val cleanDf = DataClean.apply(df).addDate().recoveryData(bStationMap).toDF
-        val resultDf = MetroOD.apply(cleanDf).calMetroOD.filteredRule.toDF
-        resultDf.select("cardCode", "timeDiff").groupBy(col("cardCode")).agg(max(col("timeDiff")) as "longestTripTime").map(_.mkString(",")).repartition(1).rdd.saveAsTextFile("longestTripTime")
+//        val df = oldDf.union(newDf).distinct()
+        val cleanDf = DataClean.apply(newDf).addDate().recoveryData(bStationMap).toDF
+        val resultDf = MetroOD.apply(cleanDf).calMetroOD.filteredRule.addLocation(dataStation).toDF
+//        resultDf.show()
+        resultDf.map(_.mkString(",")).rdd.repartition(1).saveAsTextFile("BWUsers")
+
         spark.stop()
     }
 }
@@ -128,8 +168,8 @@ object MetroOD {
   * @param cardCode 刷卡卡号
   * @param cardTime 刷卡时间
   * @param terminalCode 终端编码
-  * @param routeName 路径名称（公司名称）
-  * @param siteName 站点名称（线路名称）
+  * @param routeName 路径名称
+  * @param siteName 站点名称
   * @param outCardTime 出站刷卡时间
   * @param tradeValue 旅程交易值
   * @param outTerminalCode 出站终端编码
@@ -140,3 +180,15 @@ object MetroOD {
 case class OD(cardCode: String, cardTime: String, terminalCode: String, routeName: String, siteName: String,
               outCardTime: String, tradeValue: Double, outTerminalCode: String, outRouteName: String, outSiteName: String, date: String
              )
+
+/**
+  * 带经纬度的深圳通OD出行
+  * @param cardCode 卡号
+  * @param inSiteLon 进站站点经度
+  * @param inSiteLat 进站站点纬度
+  * @param outSiteLon 出站站点经度
+  * @param outSiteLat 出站站点纬度
+  * @param inTime 进站时间
+  * @param outTime 出站时间
+  */
+case class ODWithLocation(cardCode: String, inSiteLon: Double, inSiteLat: Double, outSiteLon: Double, outSiteLat: Double, inTime: String, outTime: String)

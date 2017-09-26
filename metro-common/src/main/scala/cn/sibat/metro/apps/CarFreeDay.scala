@@ -17,6 +17,7 @@ import cn.sibat.metro.utils.TimeUtils
 import cn.sibat.metro._
 
 import scala.collection.mutable.ArrayBuffer
+import cn.sibat.utils.timeUtils.DateDiff
 
 /**
   * 每个深圳通卡用户的每日刷卡记录产生的和可计算的数据
@@ -46,7 +47,6 @@ case class CardRecord(cardId: String, count: Int, earliestOutTime: String, frequ
   * @param earliestOutTime 最早的出门时间
   * @param frequentBusLine 乘坐最频繁的公交线路
   * @param frequentSubwayStation 乘坐最频繁的地铁站点
-  * @param largestNumberPeople 同一时间同一站点打卡人数
   * @param latestGoHomeTime 最晚回家时间
   * @param mostExpensiveTrip 最贵的一次旅程花费
   * @param workingDays 加班天数
@@ -54,12 +54,12 @@ case class CardRecord(cardId: String, count: Int, earliestOutTime: String, frequ
   * @param restDays 休息天数
   * @param tradeAmount 乘车交易额总计
   * @param stationNumNotBeen 没有去过的地铁站点数目
-  * @param awardRank 等级
+  * @param medalRank 等级
+  * @param longestTripTime 地铁乘车最长旅程时间
   */
 case class CardRecord1(cardId: String, count: Int, earliestOutTime: String, frequentBusLine: String, frequentSubwayStation: String,
-                       largestNumberPeople: Int, latestGoHomeTime: String,
-                       mostExpensiveTrip: Double, workingDays: Int, reducedCarbonEmission: Double, restDays: Int,
-                       tradeAmount: Double, stationNumNotBeen: Int, awardRank: String)
+                       latestGoHomeTime: String, mostExpensiveTrip: Double, workingDays: Int, reducedCarbonEmission: Double, restDays: Int,
+                       tradeAmount: Double, stationNumNotBeen: Int, medalRank: String, longestTripTime:Float)
 
 /**
   * 深圳通卡记录
@@ -107,7 +107,7 @@ class CarFreeDay extends Serializable {
       * @param staticMetroPath 静态表路径
       * @return bStationMap
       */
-    private def getStationMap(spark: SparkSession, staticMetroPath: String): Broadcast[Map[String, String]] = {
+    def getStationMap(spark: SparkSession, staticMetroPath: String): Broadcast[Map[String, String]] = {
         import spark.implicits._
         val ds = spark.read.textFile(staticMetroPath)
         val stationMap = ds.map(line => {
@@ -169,7 +169,12 @@ class CarFreeDay extends Serializable {
             .map(row => {
                 val cardCode = row.getString(0)
                 val cardTime = TimeUtils.apply.stamp2time(TimeUtils.apply.time2stamp(row.getString(1), "yyyyMMddHHmmss"), "yyyy-MM-dd HH:mm:ss")
-                val tradeType = row.getString(2)
+                var tradeType = row.getString(2)
+                tradeType = tradeType match {
+                    case "地铁入站"  => "21"
+                    case "地铁出站"  => "22"
+                    case "巴士"  => "31"
+                }
                 val trulyTradeValue = row.getString(3).toDouble / 100
                 //实际交易值
                 val terminalCode = row.getString(5)
@@ -205,25 +210,11 @@ class CarFreeDay extends Serializable {
             if (flag) {
                 siteName = bStationMap.value.getOrElse(siteId, siteName)
             }
-            (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), siteName, row.getString(row.fieldIndex("date")))
+            (row.getString(row.fieldIndex("cardCode")), row.getString(row.fieldIndex("cardTime")), row.getString(row.fieldIndex("tradeType")), row.getDouble(row.fieldIndex("trulyTradeValue")), row.getString(row.fieldIndex("terminalCode")), siteName, row.getString(row.fieldIndex("date")))
         })
-            .toDF("cardCode", "cardTime", "trulyTradeValue", "terminalCode", "siteName", "date")
+            .toDF("cardCode", "cardTime", "tradeType", "trulyTradeValue", "terminalCode", "siteName", "date")
 
         cleanData.unpersist()
-        //得到相同分钟和站点打卡的记录组合的map，并广播到各个节点
-        //        var timeSiteMap = newData
-        //            .filter(row => row.getString(row.fieldIndex("terminalCode")).substring(0, 6).matches("2[46].*"))
-        //            .map(row => (row.getString(row.fieldIndex("cardTime")).substring(0, 16) + row.getString(row.fieldIndex("siteName")), 1))
-        //            .rdd
-        //            .reduceByKey(_+_)
-        //            .collect()
-        //            .groupByKey(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")))
-        //            .mapGroups((key, value) => timeSiteCount(key, value.length))
-        //            .collect()
-
-        //        val timeSiteBroadData = df.sparkSession.sparkContext.broadcast(timeSiteMap)
-        //
-        //        timeSiteMap = null
 
         val resultData = newData
             .groupByKey(row => row.getString(row.fieldIndex("cardCode"))) //根据卡号分组对每一个卡号做组内计算
@@ -261,20 +252,8 @@ class CarFreeDay extends Serializable {
                     ._1
             }
 
-            var largestNumberPeople = 0 //同一时刻同一个地铁站刷卡时遇到的最多人数
-            //得到该卡号对应的刷卡站点和刷卡时间组成的对
-            //            if(metroCount != 0) {
-            //                val keyValuePairs = metroRecords.map(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + row.getString(row.fieldIndex("siteName")))
-            //                //获得所有记录中刷卡站点和刷卡时间组成的对，并将其与每张卡产生的个人记录中的每一次刷卡站点和刷卡时间组成的字符串对进行匹配，相同的话就是与持卡人同一站点同一时间进出，并找出最大值
-            //                keyValuePairs.foreach(eachKeyValuePair => {
-            //                    val meetPeople = timeSiteBroadData.value.filter(_._1.equals(eachKeyValuePair)).head._2 - 1
-            ////                    val meetPeople = timeSiteBroadData.value.filter(_.timeSite.equals(eachKeyValuePair)).head.count - 1
-            //                    if(meetPeople > largestNumberPeople) largestNumberPeople = meetPeople
-            //                })
-            //            }
-
             var mostExpensiveTrip = 0.0 //最昂贵的旅程花费
-            mostExpensiveTrip = records.maxBy(row => row.getDouble(row.fieldIndex("trulyTradeValue"))).getDouble(2)
+            mostExpensiveTrip = records.maxBy(row => row.getDouble(row.fieldIndex("trulyTradeValue"))).getDouble(3)
 
             var earliestOutTime = "null" //最早出门时间
             //先求每一天的最早打卡时间，再求所有天中最小时间的最小时间
@@ -300,14 +279,17 @@ class CarFreeDay extends Serializable {
             var workingDays = 0
             //加班天数
             var restDays = 0 //休息天数
+            val allDays = DateDiff.getDaysDiff("2017-07-31", records.map(row => row.getString(row.fieldIndex("date"))).min) //从过去一年的第一次刷卡日期开始计数
+            var cardDays = 0 //刷卡天数
             records.groupBy(row => row.getString(row.fieldIndex("date")))
                 .foreach(group => {
                     val sortedArr = group._2.sortBy(row => row.getString(row.fieldIndex("cardTime")))
                     val earliestOutTime = sortedArr.head.getString(1).split(" ")(1)
                     val latestGoHomeTime = sortedArr.last.getString(1).split(" ")(1)
                     if (earliestOutTime <= "09:30:00" && latestGoHomeTime >= "20:00:00") workingDays += 1
-                    else if (earliestOutTime >= "09:00:00" && latestGoHomeTime <= "18:00:00") restDays += 1
+                    cardDays += 1
                 })
+            restDays = allDays - cardDays
 
             var reducedCarbonEmission = 0.0 //地铁相对私家车减少的碳排放量，根据每人每次出行地铁的碳排放是为0.06kg，私家车每10公里排放3kg
             reducedCarbonEmission = metroCount * (3 - 0.06)
@@ -330,158 +312,31 @@ class CarFreeDay extends Serializable {
             else if (count > 1500 && count <= 2000) awardRank = "L4"
             else awardRank = "L5"
 
-            CardRecord1(cardId, count, earliestOutTime, frequentBusLine, frequentSubwayStation,
-                largestNumberPeople, latestGoHomeTime, mostExpensiveTrip, workingDays,
-                reducedCarbonEmission, restDays, tradeAmount, stationNumNotBeen, awardRank)
-        }).toDF()
-        resultData
-    }
-
-    def calCarFree(df: DataFrame, bStationMap: Broadcast[Map[String, String]]): DataFrame = {
-
-        import df.sparkSession.implicits._
-
-        val cleanData = DataClean.apply(df).addDate().recoveryData(bStationMap).toDF
-
-        val resultData = cleanData.groupByKey(row => row.getString(row.fieldIndex("date")))
-            .flatMapGroups((_, iter) => {
-
-                val cardRecordBuffer = new ArrayBuffer[CardRecord]()
-
-                val oneDayRecords = iter.toArray
-
-                var timeSiteMap: Iterable[timeSiteCount] = null
-                if (oneDayRecords.exists(row => row.getString(row.fieldIndex("terminalCode")).substring(0, 6).matches("2[46].*"))) {
-                    timeSiteMap = oneDayRecords.filter(row => row.getString(row.fieldIndex("terminalCode")).substring(0, 6).matches("2[46].*"))
-                        .map(row => (row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")), 1))
-                        .groupBy(tuple => tuple._1)
-                        .map(grouped => timeSiteCount(grouped._1, grouped._2.length))
-                    //                    .groupBy(row => row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName")))
-                    //                    .map(tuple => timeSiteCount(tuple._1, tuple._2.length))
+            var longestTripTime = 0.0F //地铁乘车最小旅程时间
+            val mergedData = metroRecords.groupBy(row => row.getString(row.fieldIndex("date"))).flatMap(pair => {
+                val sortedArr = pair._2.sortBy(row => row.getString(row.fieldIndex("cardTime"))).map(_.mkString(","))
+                val newRecords = new ArrayBuffer[String]()
+                for (i <- 1 until sortedArr.length) {
+                    val emptyString = new StringBuilder()
+                    val OD = emptyString.append(sortedArr(i-1)).append(',').append(sortedArr(i)).toString()
+                    newRecords += OD
                 }
+                newRecords.toArray.toIterator
+            })
+            val timeUtils = new TimeUtils
+            val filteredData = mergedData.map(_.split(","))
+                .filter(arr => arr(2)=="21" && arr(9) == "22") //筛选出进站出站的记录
+                .filter(arr => arr(5) != arr(12)) //过滤掉进站站点和出站站点相同的记录
+                .filter(arr => timeUtils.calTimeDiff(arr(1), arr(8)) < 3 * 60) //过滤掉OD时间差小于
+            if (filteredData.nonEmpty) {
+                val tripTime = filteredData.map(arr => timeUtils.calTimeDiff(arr(1), arr(8)))
+                longestTripTime = tripTime.max
+            }
 
-                oneDayRecords.groupBy(row => row.getString(row.fieldIndex("cardCode")))
-                    .foreach(grouped => {
-                        val cardCode = grouped._1
-                        val records = grouped._2
-
-                        val busRecords = records.filter(row => row.getString(row.fieldIndex("terminalCode")).matches("2[235].*"))
-                        val metroRecords = records.filter(row => row.getString(row.fieldIndex("terminalCode")).matches("2[46].*"))
-
-                        val busCount = busRecords.length
-                        var metroCount = 0
-                        val metroCardTimes = metroRecords.length
-                        if (metroCardTimes % 2 == 0) metroCount = metroCardTimes / 2
-                        else metroCount = metroCardTimes / 2 + 1
-                        val count = busCount + metroCount //出行趟次
-
-                        var frequentBusLine = "null" //最常乘坐的公交线路
-                        if (busCount != 0) {
-                            frequentBusLine = busRecords
-                                .groupBy(row => row.getString(row.fieldIndex("siteName")))
-                                .mapValues(_.length)
-                                .maxBy(_._2)
-                                ._1
-                        }
-
-                        var largestNumberPeople = 0 //同一站点同一时间打卡的人数
-                        //得到该卡号对应的刷卡站点和刷卡时间组成的对
-                        if (metroCardTimes != 0) {
-                            metroRecords.foreach(row => {
-                                val timeSite = row.getString(row.fieldIndex("cardTime")).substring(0, 16) + "," + row.getString(row.fieldIndex("siteName"))
-                                val meetPeople = timeSiteMap.filter(_.timeSite == timeSite).head.count - 1
-                                if (meetPeople > largestNumberPeople) largestNumberPeople = meetPeople
-                            })
-                        }
-
-                        var mostExpensiveTrip = 0.0 //最昂贵的旅程花费
-                        mostExpensiveTrip = records.maxBy(row => row.getDouble(row.fieldIndex("trulyTradeValue"))).getDouble(2)
-
-                        val sortedArr = records.sortBy(row => row.getString(row.fieldIndex("cardTime")))
-                        val earliestOutTime = sortedArr.head.getString(1).split(" ")(1)
-                        //最早出门时间
-                        val latestGoHomeTime = sortedArr.last.getString(1).split(" ")(1) //最晚回家时间
-
-                        var workingDays = 0
-                        //加班天数
-                        var restDays = 0 //休息天数
-
-                        if (earliestOutTime <= "09:30:00" && latestGoHomeTime >= "20:00:00") workingDays += 1
-                        else if (earliestOutTime >= "09:00:00" && latestGoHomeTime <= "18:00:00") restDays += 1
-
-                        var reducedCarbonEmission = 0.0 //碳排放
-
-                        var tradeAmount = 0.0 //交易数额总计
-                        records.foreach(row => {
-                            tradeAmount += row.getDouble(row.fieldIndex("trulyTradeValue"))
-                        })
-
-                        var stationsHasBeenBuffer = new ArrayBuffer[String]
-                        if (metroRecords.nonEmpty) {
-                            metroRecords.groupBy(row => row.getString(row.fieldIndex("siteName")))
-                                .keys
-                                .foreach(stationsHasBeenBuffer.+=(_))
-                        }
-                        val stationsHasBeen = stationsHasBeenBuffer.toArray
-
-                        cardRecordBuffer.+=(CardRecord(cardCode, count, earliestOutTime, frequentBusLine,
-                            largestNumberPeople, latestGoHomeTime, mostExpensiveTrip, workingDays,
-                            reducedCarbonEmission, restDays, tradeAmount, stationsHasBeen))
-                    })
-                cardRecordBuffer
-            }).groupByKey(dayCardRecord => dayCardRecord.cardId)
-            .mapGroups((cardCode, onePeopleRecord) => {
-                val cardId = cardCode
-
-                val records = onePeopleRecord.toArray
-
-                var countAll = 0
-                var earliestOutTimeAll = "23:59:59"
-
-                val frequentBusLineArr = new ArrayBuffer[String] //存储各种隐射
-
-                var frequentBusLineAll = "null"
-                var frequentSubwayStationAll = "null"
-                var largestNumberPeopleAll = 0
-                var latestGoHomeTimeAll = "00:00:00"
-                var mostExpensiveTripAll = 0.0
-                var workingDaysAll = 0
-                var reducedCarbonEmissionAll = 0.0
-                var restDaysAll = 0
-                var tradeAmountAll = 0.0
-
-                var stationNumNotBeenAll = 0
-                val subwayStationArr = new ArrayBuffer[String]
-
-                records.foreach(cardRecord => {
-                    countAll += cardRecord.count
-                    if (cardRecord.earliestOutTime < earliestOutTimeAll) earliestOutTimeAll = cardRecord.earliestOutTime
-                    frequentBusLineArr.+=(cardRecord.frequentBusLine)
-                    if (cardRecord.largestNumberPeople > largestNumberPeopleAll) largestNumberPeopleAll = cardRecord.largestNumberPeople
-                    if (cardRecord.latestGoHomeTime > latestGoHomeTimeAll) latestGoHomeTimeAll = cardRecord.latestGoHomeTime
-                    if (cardRecord.mostExpensiveTrip > mostExpensiveTripAll) mostExpensiveTripAll = cardRecord.mostExpensiveTrip
-                    workingDaysAll += cardRecord.workingDays
-                    reducedCarbonEmissionAll += cardRecord.reducedCarbonEmission
-                    restDaysAll += cardRecord.restDays
-                    tradeAmountAll += cardRecord.tradeAmount
-                    cardRecord.stationsHasBeen.foreach(station => subwayStationArr.+=(station))
-                })
-
-                if (frequentBusLineArr.nonEmpty) frequentBusLineAll = frequentBusLineArr.map((_, 1)).groupBy(_._1).maxBy(_._2.length)._1
-                if (subwayStationArr.nonEmpty) frequentSubwayStationAll = subwayStationArr.map((_, 1)).groupBy(_._1).maxBy(_._2.length)._1
-                stationNumNotBeenAll = 166 - subwayStationArr.map((_, 1)).groupBy(_._1).size
-
-                var awardRank = "null" //获奖等级
-                if (countAll <= 300) awardRank = "L1"
-                else if (countAll > 300 && countAll <= 1000) awardRank = "L2"
-                else if (countAll > 1000 && countAll <= 1500) awardRank = "L3"
-                else if (countAll > 1500 && countAll <= 2000) awardRank = "L4"
-                else awardRank = "L5"
-
-                CardRecord1(cardId, countAll, earliestOutTimeAll, frequentBusLineAll, frequentSubwayStationAll,
-                    largestNumberPeopleAll, latestGoHomeTimeAll, mostExpensiveTripAll, workingDaysAll,
-                    reducedCarbonEmissionAll, restDaysAll, tradeAmountAll, stationNumNotBeenAll, awardRank)
-            }).toDF()
+            CardRecord1(cardId, count, earliestOutTime, frequentBusLine, frequentSubwayStation,
+                latestGoHomeTime, mostExpensiveTrip, workingDays, reducedCarbonEmission,
+                restDays, tradeAmount, stationNumNotBeen, awardRank, longestTripTime)
+        }).toDF()
         resultData
     }
 
@@ -560,15 +415,16 @@ object CarFreeDay {
             .config("spark.kryo.registrator", "cn.sibat.metro.MyRegistrator")
             .config("spark.rdd.compress", "true")
             .getOrCreate()
-
+        import spark.implicits._
+//        spark.sparkContext.setLogLevel("ERROR")
         val bStationMap = CarFreeDay.apply.getStationMap(spark, staticMetroPath)
 
         val df = CarFreeDay.apply.getData(spark, oldDataPath, newDataPath)
 
-        //        val result = CarFreeDay.apply.calCarFree(df, bStationMap)
         val result = CarFreeDay.apply.carFreeDay(df, bStationMap)
-
-        result.repartition(1000).foreachPartition(rows => CarFreeDay.apply.saveToPostgres(rows))
+        result.show()
+//        result.map(_.mkString(",")).rdd.repartition(1).saveAsTextFile("newSztGreen")
+//        result.repartition(1000).foreachPartition(rows => CarFreeDay.apply.saveToPostgres(rows))
 
         spark.stop()
     }
