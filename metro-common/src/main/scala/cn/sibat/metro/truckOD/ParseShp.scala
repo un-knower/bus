@@ -60,11 +60,11 @@ object ParseShp {
             while (iterator.hasNext) {
                 val sf = iterator.next()
                 val attributeName = shpPath match {
-                    case "交通小区.shp" => sf.getAttribute(shpPath).toString
-                    case "街道2017.shp" => sf.getAttribute(shpPath).toString
-                    case "行政区2017.shp" => sf.getAttribute(shpPath).toString
+                    case "交通小区.shp" => "WYID"
+                    case "街道2017.shp" => "JDNAME"
+                    case "行政区2017.shp" => "QUNAME"
                 }
-                zoneName += attributeName
+                zoneName += sf.getAttribute(attributeName).toString
                 val multiPolygon = sf.getDefaultGeometry.asInstanceOf[MultiPolygon]
                 resultPolygon += multiPolygon
             }
@@ -105,5 +105,3 @@ object ParseShp {
         println(result)
     }
 }
-
-
