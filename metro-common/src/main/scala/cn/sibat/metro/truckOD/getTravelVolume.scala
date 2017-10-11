@@ -14,7 +14,7 @@ object getTravelVolume {
       * @param metadata OD数据
       */
     def withZone(metadata: Dataset[String], shpFile: String, savePath: String): Unit = {
-        ParseShp.read(shpFile)
+        val parseShp = new ParseShp(shpFile).readShp()
         import metadata.sparkSession.implicits._
         metadata.map(s => {
             val split = s.split(",")
@@ -22,8 +22,8 @@ object getTravelVolume {
             val o_lat = split(2).toDouble
             val d_lon = split(3).toDouble
             val d_lat = split(4).toDouble
-            val oArea = ParseShp.getZoneName(o_lon, o_lat)
-            val dArea = ParseShp.getZoneName(d_lon, d_lat)
+            val oArea = parseShp.getZoneName(o_lon, o_lat)
+            val dArea = parseShp.getZoneName(d_lon, d_lat)
             s + "," + oArea + "," + dArea
         }).rdd.sortBy(s => s.split(",")(1) + "," + s.split(",")(2)).repartition(1).saveAsTextFile(savePath)
     }
