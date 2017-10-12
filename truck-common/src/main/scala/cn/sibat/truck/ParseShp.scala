@@ -1,4 +1,4 @@
-package cn.sibat.metro.truckOD
+package cn.sibat.truck
 
 import java.io.File
 import java.nio.charset.Charset
@@ -101,7 +101,7 @@ class ParseShp(shpPath: String) extends Serializable{
 
 //可以直接通过调用伴生对象生成polygon
 object ParseShp{
-    def apply(shpPath: String): ParseShp = new ParseShp(shpPath).readShp()
+    def apply(shpPath: String): ParseShp = new ParseShp(shpPath)
 
     def main(args: Array[String]) {
         var shpPath = "行政区2017.shp"//不同等级下划分的区域shp文件路径
