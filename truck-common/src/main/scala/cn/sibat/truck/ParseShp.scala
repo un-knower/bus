@@ -3,7 +3,9 @@ package cn.sibat.truck
 import java.io.File
 import java.nio.charset.Charset
 
+import org.apache.spark.sql.functions._
 import com.vividsolutions.jts.geom.{Coordinate, MultiPolygon}
+import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.geotools.data.FeatureSource
 import org.geotools.data.shapefile.ShapefileDataStore
 import org.geotools.feature.{FeatureCollection, FeatureIterator}
@@ -97,6 +99,21 @@ class ParseShp(shpPath: String) extends Serializable{
         }
         result
     }
+
+    /**
+      * udf函数
+      */
+    val getZoneNameUdf: UserDefinedFunction = udf((lon: Double, lat: Double) => {
+        var result = "null"
+        val geometryFactory = JTSFactoryFinder.getGeometryFactory()
+        val coord = new Coordinate(lon, lat)
+        val point = geometryFactory.createPoint(coord)
+        val targetPolygon = POLYGON.filter(t => t._1.contains(point)) //过滤区域外的点
+        if (targetPolygon.nonEmpty) {
+            result = targetPolygon(0)._2 //若该点属于货车分析区域，则将结果存储否则为null
+        }
+        result
+    })
 }
 
 //可以直接通过调用伴生对象生成polygon

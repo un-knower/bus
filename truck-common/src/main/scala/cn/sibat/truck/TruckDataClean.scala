@@ -2,9 +2,10 @@ package cn.sibat.truck
 
 import java.text.SimpleDateFormat
 
+import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.{SparkConf, _}
-import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.functions.{col, _}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -17,30 +18,15 @@ class TruckDataClean extends Serializable{
       * 数据格式化，由于数据的后面几个关于高度和速度的字段顺序混乱，因此直接选取经纬度数据
       * @return df
       */
-    def formatUtil2(df: DataFrame): DataFrame = {
+    def formatUtil(df: DataFrame): DataFrame = {
         import df.sparkSession.implicits._
         df.map(row => {
             val carId = row.getString(0)
             val lon = row.getString(1).toDouble
             val lat = row.getString(2).toDouble
             val time = row.getString(3)
-            TruckData(carId, lon, lat, time)
-        }).toDF()
-    }
-
-    /**
-      * 数据格式化，由于数据的后面几个关于高度和速度的字段顺序混乱，因此直接选取经纬度数据
-      * @return df
-      */
-    def formatUtil(ds: Dataset[String]): DataFrame = {
-        import ds.sparkSession.implicits._
-        ds.map(row => {
-            val arr = row.split(",")
-            val carId = arr(0)
-            val lon = arr(1).toDouble
-            val lat = arr(2).toDouble
-            val time = arr(3)
-            TruckData(carId, lon, lat, time)
+            val date = time.split(" ")(0)
+            TruckData(carId, lon, lat, time, date)
         }).toDF()
     }
 
@@ -48,7 +34,7 @@ class TruckDataClean extends Serializable{
       * 计算时间差的工具
       * @param firstTime 上一个时间点
       * @param lastTime 下一个时间点
-      * @return result(s)
+      * @return result(row)
       */
     def timeDiffUtil(firstTime: String, lastTime: String):  Int = {
             var result = -1L
@@ -60,6 +46,32 @@ class TruckDataClean extends Serializable{
             }
             result.toInt
     }
+
+    /**
+      * 时间解析的工具，为了得到正确格式的时间数据
+      * @param upTime GPS 上传时间
+      * @return
+      */
+    def timeParseUtil(upTime: String): String = {
+        val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+        try {
+            sdf.parse(upTime).toString
+        } catch {
+            case _: Exception => "errorDate"
+        }
+    }
+
+    /**
+      * udf函数
+      */
+    val timeParseUdf: UserDefinedFunction = udf((upTime: String) => {
+        val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+        try {
+            sdf.parse(upTime).toString
+        } catch {
+            case _: Exception => "errorDate"
+        }
+    })
 
     /**
       * 计算两个经纬度点之间的距离(m)
@@ -75,32 +87,24 @@ class TruckDataClean extends Serializable{
         val radLat2: Double = lat2 * math.Pi / 180
         val a: Double = radLat1 - radLat2
         val b: Double = lon1 * math.Pi / 180 - lon2 * math.Pi / 180
-        val s: Double = 2 * math.asin(Math.sqrt(math.pow(Math.sin(a / 2), 2) + math.cos(radLat1) * math.cos(radLat2) * math.pow(math.sin(b / 2), 2)))
-        s * EARTH_RADIUS
+        val row: Double = 2 * math.asin(Math.sqrt(math.pow(Math.sin(a / 2), 2) + math.cos(radLat1) * math.cos(radLat2) * math.pow(math.sin(b / 2), 2)))
+        row * EARTH_RADIUS
     }
 
     /**
-      * 利用前一个点和后一个点的位置和时间求位移和平均速度，并过滤漂移点（平均速度过大）和时间解析错误的数据
-      *
-      * @param df 格式化后的dataframe
+      * 利用前一个点和后一个点的位置和时间求位移和平均速度
+      * 1、过滤漂移点（平均速度过大）以及没有移动的点（部分车在一个地方不动但是仍然没有熄火）
+      * 2、时间解析错误的数据
       * @return
       */
     def filterUtil(df: DataFrame): DataFrame = {
         import df.sparkSession.implicits._
-        val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-        val time2ISO = udf((upTime: String) => {
-            try {
-                sdf.parse(upTime).toString
-            } catch {
-                case e: Exception => "errorDate"
-            }
-        })
-        df.withColumn("upTime", time2ISO(col("time")))
-            .filter(col("upTime")=!="errorDate")
-            .drop(col("upTime"))
-            .groupByKey(row => row.getString(row.fieldIndex("carId")) + row.getString(row.fieldIndex("time")).split(" ")(0)).flatMapGroups((key, iter) => {
+        df.withColumn("timeStamp", timeParseUdf(col("time")))
+        .filter(col("timeStamp")=!="errorDate")
+        .drop(col("timeStamp"))
+        .groupByKey(row => row.getString(row.fieldIndex("carId")) + row.getString(row.fieldIndex("time")).split(" ")(0)).flatMapGroups((key, iter) => {
             val result = new ArrayBuffer[String]
-            var firstTime = ""
+            var firstTime = "null"
             var firstLon = 0.0
             var firstLat = 0.0
             iter.toArray.sortBy(row => row.getString(row.fieldIndex("time"))).foreach(row => {
@@ -118,9 +122,11 @@ class TruckDataClean extends Serializable{
                     val elapsedTime = timeDiffUtil(firstTime, lastTime)
                     val movement = distanceUtil(firstLon, firstLat, lastLon, lastLat)
                     var avgSpeed = 0.0
-                    if (!elapsedTime.equals(0.0))
+                    //过滤掉不动的点
+                    if (!elapsedTime.equals(0) && !movement.equals(0.0)) {
                         avgSpeed = movement / elapsedTime //平均速度
-                    result .+=(row.mkString(",") + "," + elapsedTime + "," + movement + "," + avgSpeed )
+                        result.+=(row.mkString(",") + "," + elapsedTime + "," + movement + "," + avgSpeed )
+                    }
                     firstTime = lastTime
                     firstLon = lastLon
                     firstLat = lastLat
@@ -128,10 +134,10 @@ class TruckDataClean extends Serializable{
             })
             result
         }).map(record => {
-            val arr = record.split(",")
-            (arr(0), arr(1).toDouble, arr(2).toDouble, arr(3), arr(4).toInt, arr(5).toDouble, arr(6).toDouble)
-        }).toDF("carId", "lon", "lat", "time", "elapsedTime", "movement", "avgSpeed")
-            .filter(col("avgSpeed") < 33.33)
+        val arr = record.split(",")
+        (arr(0), arr(1).toDouble, arr(2).toDouble, arr(3), arr(4), arr(5).toInt, arr(6).toDouble, arr(7).toDouble)
+    }).toDF("carId", "lon", "lat", "time", "date", "elapsedTime", "movement", "avgSpeed")
+        .filter(col("avgSpeed") < 33.33 && col("avgSpeed") > 0)
     }
 }
 
@@ -151,15 +157,18 @@ object TruckDataClean{
 
         import spark.implicits._
         val dataPath = "truckData/*"
-//        val dataPath = "truck_original/*"
-        val ds= spark.read.textFile(dataPath)
-        val formatData = TruckDataClean.apply().formatUtil(ds).toDF()
-        val cleanData = TruckDataClean.apply().filterUtil(formatData)
-        val intervalFor120 = cleanData.filter(col("elapsedTime") >= 120*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
-        val intervalFor60 = cleanData.filter(col("elapsedTime") >= 60*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
-        val intervalFor30 = cleanData.filter(col("elapsedTime") >= 30*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
-        println(cleanData.groupBy(col("carId")).count().count(), intervalFor30, intervalFor60, intervalFor120)//13942,7673,6455,4006,3873,3686,3615
+        val df = spark.read.format("csv").csv(dataPath)
+        val formatData = TruckDataClean().formatUtil(df)
+        val cleanData = TruckDataClean().filterUtil(formatData)
+
+        cleanData.show(1000)
+
+//        val intervalFor120 = cleanData.filter(col("elapsedTime") >= 120*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
+//        val intervalFor60 = cleanData.filter(col("elapsedTime") >= 60*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
+//        val intervalFor30 = cleanData.filter(col("elapsedTime") >= 30*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
+//        println(cleanData.groupBy(col("carId")).count().count(), intervalFor30, intervalFor60, intervalFor120)//13942,7673,6455,4006,3873,3686,3615
 //        cleanData.filter(col("carId")==="粤BZ9988").groupByKey(row => Math.floor(row.getInt(row.fieldIndex("elapsedTime"))/60)).count().show()
+
         spark.stop()
     }
 }
@@ -171,4 +180,4 @@ object TruckDataClean{
   * @param lat 纬度
   * @param time 定位时间
   */
-case class TruckData(carId: String, lon: Double, lat: Double, time: String)
+case class TruckData(carId: String, lon: Double, lat: Double, time: String, date: String)
