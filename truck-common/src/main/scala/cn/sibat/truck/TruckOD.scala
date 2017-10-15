@@ -100,8 +100,8 @@ object TruckOD{
         if (args.length > 0) {
             dataPath = args(0)
         }
-        val df = spark.read.format("csv").csv(dataPath)
-        val formatData = TruckDataClean.apply().formatUtil(df).toDF()
+        val ds = spark.read.textFile(dataPath)
+        val formatData = TruckDataClean.apply().formatUtilForText(ds).toDF()
         val cleanData = TruckDataClean.apply().filterUtil(formatData)
 
         val odData = TruckOD.apply().getOd(cleanData)

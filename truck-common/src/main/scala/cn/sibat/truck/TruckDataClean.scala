@@ -4,7 +4,7 @@ import java.text.SimpleDateFormat
 
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.{SparkConf, _}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.functions.{col, _}
 
 import scala.collection.mutable.ArrayBuffer
@@ -16,11 +16,31 @@ import scala.collection.mutable.ArrayBuffer
 class TruckDataClean extends Serializable{
     /**
       * 数据格式化，由于数据的后面几个关于高度和速度的字段顺序混乱，因此直接选取经纬度数据
+      * 文本方式读入数据
+      * @return ds
+      */
+    def formatUtilForText(ds: Dataset[String]): DataFrame = {
+        import ds.sparkSession.implicits._
+        val filteredDf = ds.map(_.split(",")).filter(_.length == 8)
+        filteredDf.map(arr => {
+            val carId = arr(0)
+            val lon = arr(1).toDouble
+            val lat = arr(2).toDouble
+            val time = arr(3)
+            val date = time.split(" ")(0)
+            TruckData(carId, lon, lat, time, date)
+        }).toDF()
+    }
+
+    /**
+      * csv文件方式读取数据
+      * 数据格式化，由于数据的后面几个关于高度和速度的字段顺序混乱，因此直接选取经纬度数据
       * @return df
       */
-    def formatUtil(df: DataFrame): DataFrame = {
+    def formatUtilForCsv(df: DataFrame): DataFrame = {
         import df.sparkSession.implicits._
-        df.map(row => {
+        val filteredDf = df.filter(_.length == 8)
+        filteredDf.map(row => {
             val carId = row.getString(0)
             val lon = row.getString(1).toDouble
             val lat = row.getString(2).toDouble
@@ -156,12 +176,13 @@ object TruckDataClean{
         val spark = SparkSession.builder().config(conf).getOrCreate()
 
         import spark.implicits._
-        val dataPath = "truckData/*"
-        val df = spark.read.format("csv").csv(dataPath)
-        val formatData = TruckDataClean().formatUtil(df)
+        val dataPath = "truckData/20160104.csv"
+//        val df = spark.read.format("csv").csv(dataPath)
+        val ds = spark.read.textFile(dataPath)
+        val formatData = TruckDataClean().formatUtilForText(ds)
         val cleanData = TruckDataClean().filterUtil(formatData)
 
-        cleanData.show(1000)
+        cleanData.show()
 
 //        val intervalFor120 = cleanData.filter(col("elapsedTime") >= 120*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
 //        val intervalFor60 = cleanData.filter(col("elapsedTime") >= 60*60).groupByKey(row => row.getString(row.fieldIndex("carId"))).count().count()
