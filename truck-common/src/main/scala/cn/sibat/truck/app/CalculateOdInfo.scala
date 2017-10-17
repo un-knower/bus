@@ -14,66 +14,6 @@ import scala.collection.mutable.ArrayBuffer
   * Created by wing on 2017/10/11.
   */
 object CalculateOdInfo {
-//    /**
-//      * 得到货车所有经过的区域
-//      * @param cleanData 清洗后的经纬度数据
-//      * @param shpFile shp
-//      * @return
-//      */
-//    def dataWithArea(cleanData: DataFrame, shpFile: String): DataFrame = {
-//        val parseShp = new ParseShp(shpFile).readShp()
-//        cleanData.withColumn("area", parseShp.getZoneNameUdf(col("lon"), col("lat"))).filter(col("area")=!="null")
-//    }
-//
-//    /**
-//      * 区域发生的出行量统计和出行距离统计求和
-//      * 只要该车辆连续出现在该区域就做一次统计
-//      * 因此，先根据车牌号和经过的区域以及日期做聚合
-//      * @param cleanDataWithArea 货车经纬度数据
-//      * @return
-//      */
-//    def getVolume(cleanDataWithArea: DataFrame): DataFrame = {
-//        import cleanDataWithArea.sparkSession.implicits._
-//        val volumeArray = new ArrayBuffer[String]
-//        cleanDataWithArea.groupByKey(row => row.getString(row.fieldIndex("carId")) + "," + row.getString(row.fieldIndex("date")))
-//            .flatMapGroups((key, iter) => {
-//                val carId = key.split(",")(0)
-//                var firstArea = "null"
-//                var secondArea = "null"
-//                val areaVolume = new mutable.HashMap[String, (Double, Int)]()
-//                var result = new ArrayBuffer[mutable.HashMap[String, (Double, Int)]]
-//                val records = iter.toArray.sortBy(row => row.getString(row.fieldIndex("time")))
-//                records.foreach(row => {
-//                    if (result.isEmpty) {
-//                        firstArea = row.getString(row.fieldIndex("area"))
-//                        areaVolume.put(firstArea, (0.0, 1))
-//                        result.+=(areaVolume)
-//                    } else{
-//                        secondArea = row.getString(row.fieldIndex("area"))
-//                        if (firstArea.equals(secondArea)) {
-//                            val data = areaVolume.getOrElse(firstArea, (0.0, 1))
-//                            val areaDistance = data._1 + row.getDouble(row.fieldIndex("movement"))
-//                            val areaTimes = data._2 + 1
-//                            areaVolume.update(firstArea, (areaDistance, areaTimes))
-//                        } else {
-//                            areaVolume.put(secondArea,(0.0, 1))
-//                        }
-//                    }
-//                    firstArea = secondArea
-//                })
-//                areaVolume.foreach(s => {
-//                    val area = s._1
-//                    val areaDistance = s._2._1
-//                    val areTimes = s._2._2
-//                    volumeArray.+(Array(carId, area, areaDistance, areTimes).mkString(","))
-//                })
-//                volumeArray
-//            }).map(s => {
-//            val Array(carId, area, areaDistance, areaTimes) = s.split(",")
-//            (carId, area, areaDistance, areaTimes)
-//        }).toDF("carId", "area", "areaDistance", "areaTimes")
-//    }
-
     /**
       *
       * @param odData OD数据
