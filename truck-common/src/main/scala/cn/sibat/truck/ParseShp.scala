@@ -247,19 +247,23 @@ object ParseShp{
     def apply(shpPath: String): ParseShp = new ParseShp(shpPath)
 
     def main(args: Array[String]) {
-        var shpPath = "行政区2017.shp"//不同等级下划分的区域shp文件路径
+        var shpPath = "交通小区.shp"//不同等级下划分的区域shp文件路径
         if (args.length > 0) {
             shpPath = args(0)
         }
-        val parseShp = ParseShp(shpPath).readPolylineShp(0.0009) //一公里等于0.009度，这里的distance的单位度，也就是传入给道路构建100米的缓存区
-        val gpsArray = parseShp.readMetroFile("F:\\模块化工作\\trafficDataAnalysis\\subway_station_GPS")
-        gpsArray.foreach(line => {
-            val arr = line.split(",")
-//            val lon = arr(6).toDouble
-//            val lat = arr(5).toDouble
-            val result = parseShp.getThreeRoadName(arr(5).toDouble, arr(4).toDouble)
-            if (!result.equals("null")) println(line + "," + result)
-        })
+        val parseShp = ParseShp(shpPath).readShp()
+        val Array(lat, lon) = LocationUtil.gcj02_To_84(22.520320,114.073140).split(",") //区域划分的shp文件的坐标系属于wgs
+        println(parseShp.getZoneName(lon.toDouble, lat.toDouble))
+
+//        val parseShp = ParseShp(shpPath).readPolylineShp(0.0009) //一公里等于0.009度，这里的distance的单位度，也就是传入给道路构建100米的缓存区
+//        val gpsArray = parseShp.readMetroFile("F:\\模块化工作\\trafficDataAnalysis\\subway_station_GPS")
+//        gpsArray.foreach(line => {
+//            val arr = line.split(",")
+////            val lon = arr(6).toDouble
+////            val lat = arr(5).toDouble
+//            val result = parseShp.getThreeRoadName(arr(5).toDouble, arr(4).toDouble)
+//            if (!result.equals("null")) println(line + "," + result)
+//        })
     }
 }
 
