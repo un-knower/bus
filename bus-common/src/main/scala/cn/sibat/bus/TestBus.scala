@@ -1,14 +1,19 @@
 package cn.sibat.bus
 
 import java.io.File
+import java.util.Properties
 import javax.xml.parsers.{DocumentBuilder, DocumentBuilderFactory}
 
-import org.apache.spark.sql.{Row, SparkSession}
+import cn.sibat.bus.utils.{DAOUtil, DateUtil}
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
+import org.apache.spark.sql.{Row, SaveMode, SparkSession}
 import org.w3c.dom.Node
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
-case class TestBus(id: String, num: String, or: String)
+case class TestBus(id: String, num: String, orr: String)
 
 /**
   * hh
@@ -32,7 +37,7 @@ object TestBus {
       val Array(route, direct, stationId, stationName, stationSeqId, stationLat, stationLon) = str.split(",")
       import cn.sibat.bus.utils.LocationUtil
       val Array(lat, lon) = LocationUtil.gcj02_To_84(stationLat.toDouble, stationLon.toDouble).split(",")
-      new StationData(route, direct, stationId, stationName, stationSeqId.toInt, lon.toDouble, lat.toDouble)
+      StationData(route, "74", direct, stationId, stationName, stationSeqId.toInt, lon.toDouble, lat.toDouble, 0)
     }.collect()
     //val bStation = spark.sparkContext.broadcast(station)
 
@@ -64,16 +69,49 @@ object TestBus {
     println("开始程序时间:" + start + ";结束时间:" + end + ";耗时:" + (end - start) / 1000 + "s!!!")
   }
 
+  def splitTan(): Unit = {
+    val spark = SparkSession.builder().appName("yy").master("local[*]").getOrCreate()
+    import spark.implicits._
+    spark.read.textFile("D:/testData/公交处/frechetAll/test.txt").groupByKey(s => s.split(",")(3)).flatMapGroups((s, it) => {
+      var windows = new ArrayBuffer[Double]()
+      val arr = it.toArray.map(s => s.split(",")(s.split(",").length - 1).toDouble).tail
+      var firstDis = 1.0
+      var index = 0
+      val indexMean = new ArrayBuffer[Int]()
+      var firstOneDis = 1.0
+      val arrMax = arr.max
+      val arrMin = arr.min
+      var step = true //表示下降
+      var firstValue = false //达到第一个切分点
+      println(arrMax, arrMin)
+      arr.foreach { line =>
+        val dis = line
+        if (windows.length < 15) {
+          if (math.abs(arrMax - dis) > math.abs(arrMin - dis)) {
+            step = false //表示上升
+          }
+          windows += dis / firstDis
+        } else {
+          if (windows.sum / windows.length == 1.0) {
+            if (indexMean.nonEmpty && index - indexMean(indexMean.length - 1) > 1) {
+              val current = arr(indexMean.sum / indexMean.length)
+              if (step)
+                println(index, indexMean.sum / indexMean.length, current, current / firstOneDis)
+              firstOneDis = arr(indexMean.sum / indexMean.length)
+              indexMean.clear()
+            }
+            indexMean += index
+          }
+          windows = windows.tail.+=(dis / firstDis)
+        }
+        firstDis = dis
+        index += 1
+      }
+      it
+    }).count()
+  }
 
   def main(args: Array[String]): Unit = {
-    val data = "113.908439,22.482539;\n113.908021,22.482143;\n113.908477,22.483114;\n113.908956,22.482767;\n113.908365,22.483066;\n113.908757,22.48358;\n113.908394,22.482901;\n113.909539,22.48304;\n113.908526,22.48304;\n113.908285,22.482853;\n113.906366,22.484611;\n113.908259,22.482254;\n113.908624,22.483146;".split("\n")
-
-    var sum = (0.0, 0.0)
-    data.foreach(s=>{
-      val Array(lon,lat) = s.replace(";","").split(",").map(_.toDouble)
-      sum = sum.copy(sum._1 + lon,sum._2 + lat)
-    })
-
-    println(sum._1/data.length,sum._2/data.length)
+    println("++++++++++++++")
   }
 }

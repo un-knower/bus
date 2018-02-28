@@ -100,7 +100,7 @@ class DataFrameUtils {
       df = df.withColumn(cols(i), udf(lit(i), col(changeCol)).cast(castType(i).toLowerCase()))
     }
     val resultSchema = stand ++ cols
-    df.select(resultSchema.map(col(_)): _*)
+    df.select(resultSchema.map(col): _*)
   }
 }
 

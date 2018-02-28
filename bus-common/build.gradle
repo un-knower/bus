@@ -32,5 +32,8 @@ dependencies {
     compile 'mysql:mysql-connector-java:5.1.42'
     compile 'ai.h2o:sparkling-water-examples_2.11:2.0.9'
     compile 'com.intel.analytics.bigdl:bigdl-SPARK_2.0:0.2.0'
+    compile 'org.geotools:gt-main:17.2'
+    compile 'org.geotools:gt-shapefile:17.2'
+    compile fileTree(dir:'lib',include:['*.jar'])
     compile project(":metro-common")
 }

@@ -1,14 +1,17 @@
 package cn.sibat.bus
 
+import java.io.{File, FileWriter}
+import java.sql.Timestamp
 import java.text.SimpleDateFormat
 import java.util.UUID
 
-import cn.sibat.bus.utils.LocationUtil
+import cn.sibat.bus.utils.{DAOUtil, DateUtil, LocationUtil}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, Row}
 
 import scala.collection.mutable.ArrayBuffer
+import scala.collection._
 
 class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable {
 
@@ -174,37 +177,6 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
     (0 until length).map(i => Trip(carId, split(oldLength + i * 6), split(oldLength + 1 + i * struct), split(oldLength + 2 + i * struct).toInt, split(oldLength + 3 + i * struct).toDouble, split(oldLength + 4 + i * struct).toInt, split(oldLength + 5 + i * struct).toDouble, 0)).toArray
   }
 
-  def toStationForFrechet(bStation: Broadcast[Array[StationData]]): Unit = {
-
-    val time2date = udf { (upTime: String) => upTime.split("T")(0) }
-
-    val carIdAndRoute = busDataCleanUtils.data.select(col("carId"), time2date(col("upTime")).as("upTime"), col("route")).distinct().rdd
-      .groupBy(row => row.getString(row.fieldIndex("carId")) + "," + row.getString(row.fieldIndex("upTime"))).collectAsMap()
-    val bCarIdAndRoute = busDataCleanUtils.data.sparkSession.sparkContext.broadcast(carIdAndRoute)
-
-    val groupByKey = busDataCleanUtils.data.groupByKey(row => row.getString(row.fieldIndex("carId")) + "," + row.getString(row.fieldIndex("upTime")).split("T")(0))
-
-    import busDataCleanUtils.data.sparkSession.implicits._
-    groupByKey.flatMapGroups((s, it) => {
-      var gps = it.toArray[Row].sortBy(row => row.getString(row.fieldIndex("upTime"))).map(_.mkString(","))
-      val stationMap = bStation.value.groupBy(sd => sd.route + "," + sd.direct)
-      val lon_lat = new ArrayBuffer[Point]()
-      gps = gps.map { row =>
-        val result = row
-        val split = row.split(",")
-        val lon = split(8).toDouble
-        val lat = split(9).toDouble
-        val time = split(11)
-        val lineId = split(4)
-        lon_lat += Point(lon, lat)
-        val stationData = stationMap.getOrElse(lineId + ",up", Array()).map(sd => Point(sd.stationLon, sd.stationLat))
-        val frechetDis = FrechetUtils.compareGesture1(lon_lat.toArray, stationData)
-        result + "," + frechetDis
-      }
-      gps
-    })
-  }
-
   /**
     * 1.从备选库得出备选线路id，默认上传的线路为正确线路
     * 2.按天和车分组进行操作
@@ -221,7 +193,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
     *
     * @return df
     */
-  def toStation(bStation: Broadcast[Map[String, Array[StationData]]], isVisual: Boolean = false): DataFrame = {
+  def toStation(bStation: Broadcast[immutable.Map[String, Array[StationData]]], isVisual: Boolean = false): DataFrame = {
     val time2date = udf { (upTime: String) =>
       upTime.split("T")(0)
     }
@@ -237,7 +209,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
     import busDataCleanUtils.data.sparkSession.implicits._
     groupByKey.flatMapGroups((s, it) => {
 
-      val maybeLineId = bCarIdAndRoute.value.get(s).get
+      val maybeLineId = bCarIdAndRoute.value(s)
 
       //局部sort，对每一辆车的每天的数据进行排序，内存应该占不大
       val gps = it.toArray[Row].sortBy(row => row.getString(row.fieldIndex("upTime"))).map(_.mkString(","))
@@ -256,6 +228,925 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
       }
       toBusArrivalData(confirm, stationMap).iterator
     }).toDF()
+  }
+
+  /**
+    * 1.从备选库得出备选线路id，默认上传的线路为正确线路
+    * 2.按天和车分组进行操作
+    * 3.分组操作内容
+    * 3.1 按时间upTime进行排序
+    * 3.2 选取前两个不同位置的点，做方向确认，若识别方向为up，但是接近up的终点站200m，则方向为down，同理为up，否则为识别的方向
+    * 原理 A---------------------B，AB为终点站，A作为up的初站点，down的末站点，B为末站点，down的初站点
+    * ---------C--D--E------------，D为第一个点，若C为第二个点则相对A站点up的反方向，方向为down，以此类推
+    * 3.3 根据线路方向，把车所在最近站点位置推算出来添加在数据后面，线路，方向，前一站点index，前一站点距离，下一站点index，下一站点距离（多线路加多个）
+    * 3.4 达到线路的末位置，则切换方向，中点偏离点标记为正常方向+Or+异常方向，可能是漂移也可能是没到站点就切方向了
+    * 3.5 中间异常点纠正，根据前后正常的内容进行推算异常点方法见 @link{error2right}
+    * 3.6 多线路纠正，车辆存在替车等情况，或者上传多线路，利用弗雷歇定理进行识别纠正 方法见@link{routeConfirm}
+    * 转换成公交到站数据
+    *
+    * @return df
+    */
+  def toStation1(bStation: Broadcast[immutable.Map[String, Array[StationData]]], checkpoint: Broadcast[immutable.Map[String, Array[LineCheckPoint]]]): DataFrame = {
+    val time2date = udf { (upTime: String) =>
+      upTime.split("T")(0)
+    }
+
+    //对每辆车的时间进行排序，进行shuffleSort还是进行局部sort呢？
+    val groupByKey = busDataCleanUtils.data.groupByKey(row => row.getString(row.fieldIndex("carId")) + "," + row.getString(row.fieldIndex("upTime")).split("T")(0))
+
+    import busDataCleanUtils.data.sparkSession.implicits._
+    groupByKey.flatMapGroups((s, it) => {
+
+      val arr = it.toArray
+      val maybeLineId = arr.map(s => s.getString(s.fieldIndex("route"))).toSet
+
+      //局部sort，对每一辆车的每天的数据进行排序，内存应该占不大
+      val gps = arr.sortBy(row => row.getString(row.fieldIndex("upTime"))).map(_.mkString(","))
+
+      val stationMap = bStation.value
+      val checkpointMap = checkpoint.value
+      //typeCode|carId|tripId|stationIndex
+      data2busArrivalHBase(maybeLineId, checkpointMap, stationMap, gps).map { bah =>
+        val direct = if (bah.direct.equals("up")) "01" else "02"
+        val row = direct + "|" + s.split(",")(0).replace("��", "粤") + "|" + bah.tripId + "|" + bah.stationIndex
+        bah.copy(rowKey = row)
+      }
+    }).toDF()
+  }
+
+  /**
+    * 1.从备选库得出备选线路id，默认上传的线路为正确线路
+    * 2.按天和车分组进行操作
+    * 3.分组操作内容
+    * 3.1 按时间upTime进行排序
+    * 3.2 选取前两个不同位置的点，做方向确认，若识别方向为up，但是接近up的终点站200m，则方向为down，同理为up，否则为识别的方向
+    * 原理 A---------------------B，AB为终点站，A作为up的初站点，down的末站点，B为末站点，down的初站点
+    * ---------C--D--E------------，D为第一个点，若C为第二个点则相对A站点up的反方向，方向为down，以此类推
+    * 3.3 根据线路方向，把车所在最近站点位置推算出来添加在数据后面，线路，方向，前一站点index，前一站点距离，下一站点index，下一站点距离（多线路加多个）
+    * 3.4 达到线路的末位置，则切换方向，中点偏离点标记为正常方向+Or+异常方向，可能是漂移也可能是没到站点就切方向了
+    * 3.5 中间异常点纠正，根据前后正常的内容进行推算异常点方法见 @link{error2right}
+    * 3.6 多线路纠正，车辆存在替车等情况，或者上传多线路，利用弗雷歇定理进行识别纠正 方法见@link{routeConfirm}
+    * 转换成公交到站数据
+    *
+    * @return df
+    */
+  def toStation2(bStation: Broadcast[immutable.Map[String, Array[StationData]]]): DataFrame = {
+    val time2date = udf { (upTime: String) =>
+      upTime.split("T")(0)
+    }
+
+    //对每辆车的时间进行排序，进行shuffleSort还是进行局部sort呢？
+    val groupByKey = busDataCleanUtils.data.groupByKey(row => row.getString(row.fieldIndex("carId")) + "," + row.getString(row.fieldIndex("upTime")).split("T")(0))
+
+    import busDataCleanUtils.data.sparkSession.implicits._
+    groupByKey.flatMapGroups((s, it) => {
+
+      val arr = it.toArray
+      val maybeLineId = arr.map(s => s.getString(s.fieldIndex("route"))).toSet
+
+      //局部sort，对每一辆车的每天的数据进行排序，内存应该占不大
+      val gps = arr.sortBy(row => row.getString(row.fieldIndex("upTime"))).map(_.mkString(","))
+
+      val stationMap = bStation.value
+      //typeCode|carId|tripId|stationIndex
+      data2busArrivalHBase1(maybeLineId, stationMap, gps).map { bah =>
+        val direct = if (bah.direct.equals("up")) "01" else "02"
+        val row = direct + "|" + s.split(",")(0).replace("��", "粤") + "|" + bah.tripId + "|" + bah.stationIndex
+        bah.copy(rowKey = row)
+      }
+    }).toDF()
+  }
+
+  /**
+    * 方法分离
+    * 3.2 选取前两个不同位置的点，做方向确认，若识别方向为up，但是接近up的终点站200m，则方向为down，同理为up，否则为识别的方向
+    * 原理 A---------------------B，AB为终点站，A作为up的初站点，down的末站点，B为末站点，down的初站点
+    * ---------C--D--E------------，D为第一个点，若C为第二个点则相对A站点up的反方向，方向为down，以此类推
+    * 3.3 根据线路方向，把车所在最近站点位置推算出来添加在数据后面，线路，方向，前一站点index，前一站点距离，下一站点index，下一站点距离（多线路加多个）
+    * 3.4 达到线路的末位置，则切换方向，中点偏离点标记为正常方向+Or+异常方向，可能是漂移也可能是没到站点就切方向了
+    *
+    * @param maybeLineId 可能线路集合
+    * @param stationMap  站点信息
+    * @param gpsArr      gps数据
+    * @return
+    */
+  private def data2busArrivalHBase1(maybeLineId: Set[String], stationMap: Map[String, Array[StationData]], gpsArr: Array[String]): Array[BusArrivalHBase2] = {
+
+    val checkpointMap = new mutable.HashMap[String, Array[LineCheckPoint]]()
+
+    //计算checkpoint的与站点方向的关系，因为checkpoint有可能都是从同一个起点出发，如19路公交的checkpoint就都是上行方向，这里返回就是（up，up）
+    //结果checkpoint的上行对应站点的方向，checkpoint的下行对应站点的方向
+    val checkpointDirect = maybeLineId.map(row => {
+      val route = row
+      val rs = DAOUtil.selectCheckpointStatement("jdbc:mysql://172.16.3.200:3306/xbus_v2?user=xbpeng&password=xbpeng", route)
+      checkpointMap.++=(rs)
+
+      val maybeCheckpointUp = checkpointMap.getOrElse(route + ",up", Array()).sortBy(_.order).map(l => Point(l.lon, l.lat))
+      val maybeCheckpointDown = checkpointMap.getOrElse(route + ",down", Array()).sortBy(_.order).map(l => Point(l.lon, l.lat))
+      val maybeStationUp = stationMap.getOrElse(route + ",up", Array()).sortBy(_.stationSeqId).map(l => Point(l.stationLon, l.stationLat))
+      val maybeStationDown = stationMap.getOrElse(route + ",down", Array()).sortBy(_.stationSeqId).map(l => Point(l.stationLon, l.stationLat))
+
+      var temp0 = "up"
+      var temp1 = "up"
+      try {
+        val cd_sd = FrechetUtils.compareGesture1(maybeCheckpointDown, maybeStationDown)
+        val cd_su = FrechetUtils.compareGesture1(maybeCheckpointDown, maybeStationUp)
+        val cu_sd = FrechetUtils.compareGesture1(maybeCheckpointUp, maybeStationDown)
+        val cu_su = FrechetUtils.compareGesture1(maybeCheckpointUp, maybeStationUp)
+        if (cd_sd < cd_su && cd_sd > 0) {
+          temp1 = "down"
+        } else {
+          temp1 = "up"
+        }
+        if (cu_sd < cu_su && cu_sd > 0) {
+          temp0 = "down"
+        } else {
+          temp0 = "up"
+        }
+      } catch {
+        case e: Exception => println(route)
+      }
+      (route, temp0, temp1)
+    })
+
+    //车辆线路定位，主要依赖于上传线路,过滤出所有符合条件的GPS点
+    val gps = gpsArr.map(s => {
+      val split = s.split(",")
+      val lon = split(8).toDouble
+      val lat = split(9).toDouble
+      var lineId = ""
+      var temp = false
+
+      maybeLineId.foreach { route =>
+        var status = true
+        val maybeRouteUp = checkpointMap.getOrElse(route + ",up", Array()).sortBy(_.order)
+        val maybeRouteDown = checkpointMap.getOrElse(route + ",down", Array()).sortBy(_.order)
+
+        if (!maybeRouteUp.isEmpty) {
+          val index = filterInLineGps(lon, lat, maybeRouteUp)
+          if (index._1 >= index._3) {
+            lineId += route + ",up," + index._2 + ","
+            temp = true
+            status = false
+          }
+        }
+        if (!maybeRouteDown.isEmpty && status) {
+          val index = filterInLineGps(lon, lat, maybeRouteDown)
+          if (index._1 >= index._3) {
+            lineId += route + ",down," + index._2 + ","
+            temp = true
+          }
+        }
+      }
+      (s, temp, lineId)
+    }).filter(_._2).map(t3 => {
+      (t3._1, t3._3)
+    })
+
+    val map = new mutable.HashMap[String, Array[BusLocation]]()
+    val tempDirect = new mutable.HashMap[String, String]()
+    //方向归结
+    for (i <- 0 until gps.length - 1) {
+      val curSplit = gps(i)._2.split(",")
+      val curLine = (0 until curSplit.length / 6).map(index => Trip("carId", curSplit(0 + index * 6), curSplit(1 + index * 6), curSplit(2 + index * 6).toInt, curSplit(3 + index * 6).toDouble, curSplit(4 + index * 6).toInt, curSplit(5 + index * 6).toDouble, 0))
+      val nextSplit = gps(i + 1)._2.split(",")
+      val nextLine = (0 until nextSplit.length / 6).map(index => Trip("carId", nextSplit(0 + index * 6), nextSplit(1 + index * 6), nextSplit(2 + index * 6).toInt, nextSplit(3 + index * 6).toDouble, nextSplit(4 + index * 6).toInt, nextSplit(5 + index * 6).toDouble, 0))
+
+      val split_1 = gps(i)._1.split(",")
+      val split_2 = gps(i + 1)._1.split(",")
+      val curLon = split_1(8).toDouble
+      val curLat = split_1(9).toDouble
+      val nextLon = split_2(8).toDouble
+      val nextLat = split_2(9).toDouble
+      val gpsTime = split_1(11)
+
+      //时间差 s
+      val costTime = DateUtil.dealTime(gpsTime, split_2(11), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+
+      //速度 m/s (0-40 km/h -> 0-11 m/s)
+      val s1 = LocationUtil.distance(curLon, curLat, nextLon, nextLat) / costTime
+      val speed = if (s1 > 11) 11 else s1
+
+      for (elem <- curLine) {
+        val t3 = checkpointDirect.find(p => p._1.equals(elem.route)).get
+        val next = nextLine.find(t => t.route.equals(elem.route))
+        val curIndex = elem.firstSeqIndex
+        val curDirect = elem.direct
+        val bl = BusLocation(i, curLon, curLat, gpsTime, elem.firstSeqIndex, elem.ld, elem.nextSeqIndex, elem.rd, costTime, speed)
+        //println(bl)
+        if (t3._2.equals("up")) {
+          if (next.isDefined) {
+            val nextDirect = next.get.direct
+            val nextIndex = next.get.firstSeqIndex
+            if (curIndex < nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //up
+              map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+              tempDirect.update(elem.route, "up")
+            } else if (curIndex > nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //down
+              //index + "," + left + "," + indexRight + "," + right
+              val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+              val newInfoSplit = newInfo._2.split(",")
+              val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+              map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+              tempDirect.update(elem.route, "down")
+            } else if (curIndex == nextIndex || curDirect.equals("down")) {
+              val curDisL = elem.ld
+              val nextDisL = next.get.ld
+              val curNextSeqIndex = elem.nextSeqIndex
+              val checkpointSize = checkpointMap.getOrElse(elem.route + ",up", Array()).length
+              if (checkpointSize == curNextSeqIndex && curDisL < nextDisL && curDirect.equals("up")) {
+                map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                tempDirect.update(elem.route, "up")
+              } else if (checkpointSize == curNextSeqIndex && curDisL > nextDisL && curDirect.equals("up")) {
+                val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                val newInfoSplit = newInfo._2.split(",")
+                val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                tempDirect.update(elem.route, "down")
+              } else {
+                val op = tempDirect.get(elem.route)
+                if (op.isEmpty) {
+                  val max = checkpointMap.getOrElse(elem.route + "," + elem.direct, Array()).maxBy(_.order).order
+                  val cur = curIndex.toFloat / max
+                  if (cur > 0.7f) {
+                    val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                    val newInfoSplit = newInfo._2.split(",")
+                    val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                    map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                    tempDirect.update(elem.route, "down")
+                  } else {
+                    map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                    tempDirect.update(elem.route, "up")
+                  }
+                } else if (op.get.equals("up") && !curDirect.equals("down")) {
+                  map += ((elem.route + "," + op.get, map.getOrElse(elem.route + "," + op.get, Array()) ++ Array(bl)))
+                  tempDirect.update(elem.route, "up")
+                } else if (op.get.equals("down")) {
+                  val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                  val newInfoSplit = newInfo._2.split(",")
+                  val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                  map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                  tempDirect.update(elem.route, "down")
+                }
+              }
+            }
+          }
+        } else {
+          if (next.isDefined) {
+            val nextIndex = next.get.firstSeqIndex
+            val nextDirect = next.get.direct
+            if (curIndex < nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //up
+              val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+              val newInfoSplit = newInfo._2.split(",")
+              val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+              map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+              tempDirect.update(elem.route, "down")
+            } else if (curIndex > nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //down
+              map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+              tempDirect.update(elem.route, "up")
+            } else if (curIndex == nextIndex || curDirect.equals("down")) {
+              val curDisL = elem.ld
+              val nextDisL = elem.ld
+              if (curDisL < nextDisL && curDirect.equals("up")) {
+                val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                val newInfoSplit = newInfo._2.split(",")
+                val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                tempDirect.update(elem.route, "down")
+              } else if (curDisL > nextDisL && curDirect.equals("up")) {
+                map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                tempDirect.update(elem.route, "up")
+              } else {
+                val op = tempDirect.get(elem.route)
+                if (op.isEmpty) {
+                  val max = checkpointMap.getOrElse(elem.route + "," + elem.direct, Array()).maxBy(_.order).order
+                  val cur = curIndex.toFloat / max
+                  if (cur > 0.7f) {
+                    map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                    tempDirect.update(elem.route, "up")
+                  } else {
+                    val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                    val newInfoSplit = newInfo._2.split(",")
+                    val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                    map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                    tempDirect.update(elem.route, "down")
+                  }
+                } else if (op.get.equals("up") && !curDirect.equals("down")) {
+                  map += ((elem.route + "," + op.get, map.getOrElse(elem.route + "," + op.get, Array()) ++ Array(bl)))
+                  tempDirect.update(elem.route, "up")
+                } else if (op.get.equals("down")) {
+                  val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                  val newInfoSplit = newInfo._2.split(",")
+                  val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                  map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                  tempDirect.update(elem.route, "down")
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    val result = new ArrayBuffer[BusArrivalHBase2]()
+    //切分与抛弃
+    val useIndex = new ArrayBuffer[(Int, Int)]()
+    map.foreach(tuple => {
+      val list = tuple._2.filter(bl => useIndex.forall(t => t._1 > bl.index || t._2 < bl.index)).sortBy(bl => bl.index)
+      var index = 0 //切分索引
+      val split = tuple._1.split(",")
+      val curDirect = split(1)
+      val curLine = split(0)
+      val checkDirect = checkpointDirect.find(t => t._1.equals(curLine)).get
+
+      val sm = stationMap.getOrElse(tuple._1, Array()).sortBy(_.stationSeqId)
+      val cm = checkpointMap.getOrElse(tuple._1, Array()).sortBy(_.order)
+      if ((curDirect.equals("up") && checkDirect._2.equals("up")) || (curDirect.equals("down") && checkDirect._3.equals("down"))) {
+        val station = stationJoinLineCheckpointId(sm, cm)
+        for (i <- 0 until list.length - 1) {
+          val first = list(i).indexLeft
+          val next = list(i + 1).indexLeft
+          val time = DateUtil.dealTime(list(i).gpsTime, list(i + 1).gpsTime, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+
+          if (next < first && time > 900) {
+            //趟次切分与验证
+            val confirm = tripConfirm(list.slice(index, i + 1), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+            index = i + 1
+          }
+          //最后一趟识别
+          if (i == list.length - 2 && index < i) {
+            //趟次切分与验证
+            val confirm = tripConfirm(list.slice(index, list.length), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+          }
+        }
+      } else {
+        val station = stationJoinLineCheckpointIdDiff(sm, cm)
+        for (i <- 0 until list.length - 1) {
+          val first = list(i).indexLeft
+          val next = list(i + 1).indexLeft
+          val time = DateUtil.dealTime(list(i).gpsTime, list(i + 1).gpsTime, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+          if (next > first && time > 900) {
+            //趟次切分与验证
+            val confirm = tripConfirmDiff(list.slice(index, i + 1), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+            index = i + 1
+          }
+          //最后一趟识别
+          if (i == list.length - 2 && index < i) {
+            //趟次切分与验证
+            val confirm = tripConfirmDiff(list.slice(index, list.length), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+          }
+        }
+      }
+    })
+
+    result.toArray
+  }
+
+  /**
+    * 方法分离
+    * 3.2 选取前两个不同位置的点，做方向确认，若识别方向为up，但是接近up的终点站200m，则方向为down，同理为up，否则为识别的方向
+    * 原理 A---------------------B，AB为终点站，A作为up的初站点，down的末站点，B为末站点，down的初站点
+    * ---------C--D--E------------，D为第一个点，若C为第二个点则相对A站点up的反方向，方向为down，以此类推
+    * 3.3 根据线路方向，把车所在最近站点位置推算出来添加在数据后面，线路，方向，前一站点index，前一站点距离，下一站点index，下一站点距离（多线路加多个）
+    * 3.4 达到线路的末位置，则切换方向，中点偏离点标记为正常方向+Or+异常方向，可能是漂移也可能是没到站点就切方向了
+    *
+    * @param maybeLineId 可能线路集合
+    * @param stationMap  站点信息
+    * @param gpsArr      gps数据
+    * @return
+    */
+  private def data2busArrivalHBase(maybeLineId: Set[String], checkpointMap: Map[String, Array[LineCheckPoint]], stationMap: Map[String, Array[StationData]], gpsArr: Array[String]): Array[BusArrivalHBase2] = {
+
+    //计算checkpoint的与站点方向的关系，因为checkpoint有可能都是从同一个起点出发，如19路公交的checkpoint就都是上行方向，这里返回就是（up，up）
+    //结果checkpoint的上行对应站点的方向，checkpoint的下行对应站点的方向
+    val checkpointDirect = maybeLineId.map(row => {
+      val route = row
+      val maybeCheckpointUp = checkpointMap.getOrElse(route + ",up", Array()).sortBy(_.order).map(l => Point(l.lon, l.lat))
+      val maybeCheckpointDown = checkpointMap.getOrElse(route + ",down", Array()).sortBy(_.order).map(l => Point(l.lon, l.lat))
+      val maybeStationUp = stationMap.getOrElse(route + ",up", Array()).sortBy(_.stationSeqId).map(l => Point(l.stationLon, l.stationLat))
+      val maybeStationDown = stationMap.getOrElse(route + ",down", Array()).sortBy(_.stationSeqId).map(l => Point(l.stationLon, l.stationLat))
+
+      var temp0 = "up"
+      var temp1 = "up"
+      try {
+        val cd_sd = FrechetUtils.compareGesture1(maybeCheckpointDown, maybeStationDown)
+        val cd_su = FrechetUtils.compareGesture1(maybeCheckpointDown, maybeStationUp)
+        val cu_sd = FrechetUtils.compareGesture1(maybeCheckpointUp, maybeStationDown)
+        val cu_su = FrechetUtils.compareGesture1(maybeCheckpointUp, maybeStationUp)
+        if (cd_sd < cd_su && cd_sd > 0) {
+          temp1 = "down"
+        } else {
+          temp1 = "up"
+        }
+        if (cu_sd < cu_su && cu_sd > 0) {
+          temp0 = "down"
+        } else {
+          temp0 = "up"
+        }
+      } catch {
+        case e: Exception => println(route)
+      }
+      (route, temp0, temp1)
+    })
+
+    //车辆线路定位，主要依赖于上传线路,过滤出所有符合条件的GPS点
+    val gps = gpsArr.map(s => {
+      val split = s.split(",")
+      val lon = split(8).toDouble
+      val lat = split(9).toDouble
+      var lineId = ""
+      var temp = false
+
+      maybeLineId.foreach { route =>
+        var status = true
+        val maybeRouteUp = checkpointMap.getOrElse(route + ",up", Array()).sortBy(_.order)
+        val maybeRouteDown = checkpointMap.getOrElse(route + ",down", Array()).sortBy(_.order)
+
+        if (!maybeRouteUp.isEmpty) {
+          val index = filterInLineGps(lon, lat, maybeRouteUp)
+          if (index._1 >= index._3) {
+            lineId += route + ",up," + index._2 + ","
+            temp = true
+            status = false
+          }
+        }
+        if (!maybeRouteDown.isEmpty && status) {
+          val index = filterInLineGps(lon, lat, maybeRouteDown)
+          if (index._1 >= index._3) {
+            lineId += route + ",down," + index._2 + ","
+            temp = true
+          }
+        }
+      }
+      (s, temp, lineId)
+    }).filter(_._2).map(t3 => {
+      (t3._1, t3._3)
+    })
+
+    val map = new mutable.HashMap[String, Array[BusLocation]]()
+    val tempDirect = new mutable.HashMap[String, String]()
+    //方向归结
+    for (i <- 0 until gps.length - 1) {
+      val curSplit = gps(i)._2.split(",")
+      val curLine = (0 until curSplit.length / 6).map(index => Trip("carId", curSplit(0 + index * 6), curSplit(1 + index * 6), curSplit(2 + index * 6).toInt, curSplit(3 + index * 6).toDouble, curSplit(4 + index * 6).toInt, curSplit(5 + index * 6).toDouble, 0))
+      val nextSplit = gps(i + 1)._2.split(",")
+      val nextLine = (0 until nextSplit.length / 6).map(index => Trip("carId", nextSplit(0 + index * 6), nextSplit(1 + index * 6), nextSplit(2 + index * 6).toInt, nextSplit(3 + index * 6).toDouble, nextSplit(4 + index * 6).toInt, nextSplit(5 + index * 6).toDouble, 0))
+
+      val split_1 = gps(i)._1.split(",")
+      val split_2 = gps(i + 1)._1.split(",")
+      val curLon = split_1(8).toDouble
+      val curLat = split_1(9).toDouble
+      val nextLon = split_2(8).toDouble
+      val nextLat = split_2(9).toDouble
+      val gpsTime = split_1(11)
+
+      //时间差 s
+      val costTime = DateUtil.dealTime(gpsTime, split_2(11), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+
+      //速度 m/s (0-40 km/h -> 0-11 m/s)
+      val s1 = LocationUtil.distance(curLon, curLat, nextLon, nextLat) / costTime
+      val speed = if (s1 > 11) 11 else s1
+
+      for (elem <- curLine) {
+        val t3 = checkpointDirect.find(p => p._1.equals(elem.route)).get
+        val next = nextLine.find(t => t.route.equals(elem.route))
+        val curIndex = elem.firstSeqIndex
+        val curDirect = elem.direct
+        val bl = BusLocation(i, curLon, curLat, gpsTime, elem.firstSeqIndex, elem.ld, elem.nextSeqIndex, elem.rd, costTime, speed)
+        //println(bl)
+        if (t3._2.equals("up")) {
+          if (next.isDefined) {
+            val nextDirect = next.get.direct
+            val nextIndex = next.get.firstSeqIndex
+            if (curIndex < nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //up
+              map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+              tempDirect.update(elem.route, "up")
+            } else if (curIndex > nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //down
+              //index + "," + left + "," + indexRight + "," + right
+              val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+              val newInfoSplit = newInfo._2.split(",")
+              val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+              map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+              tempDirect.update(elem.route, "down")
+            } else if (curIndex == nextIndex || curDirect.equals("down")) {
+              val curDisL = elem.ld
+              val nextDisL = next.get.ld
+              val curNextSeqIndex = elem.nextSeqIndex
+              val checkpointSize = checkpointMap.getOrElse(elem.route + ",up", Array()).length
+              if (checkpointSize == curNextSeqIndex && curDisL < nextDisL && curDirect.equals("up")) {
+                map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                tempDirect.update(elem.route, "up")
+              } else if (checkpointSize == curNextSeqIndex && curDisL > nextDisL && curDirect.equals("up")) {
+                val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                val newInfoSplit = newInfo._2.split(",")
+                val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                tempDirect.update(elem.route, "down")
+              } else {
+                val op = tempDirect.get(elem.route)
+                if (op.isEmpty) {
+                  val max = checkpointMap.getOrElse(elem.route + "," + elem.direct, Array()).maxBy(_.order).order
+                  val cur = curIndex.toFloat / max
+                  if (cur > 0.7f) {
+                    val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                    val newInfoSplit = newInfo._2.split(",")
+                    val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                    map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                    tempDirect.update(elem.route, "down")
+                  } else {
+                    map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                    tempDirect.update(elem.route, "up")
+                  }
+                } else if (op.get.equals("up") && !curDirect.equals("down")) {
+                  map += ((elem.route + "," + op.get, map.getOrElse(elem.route + "," + op.get, Array()) ++ Array(bl)))
+                  tempDirect.update(elem.route, "up")
+                } else if (op.get.equals("down")) {
+                  val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                  val newInfoSplit = newInfo._2.split(",")
+                  val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                  map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                  tempDirect.update(elem.route, "down")
+                }
+              }
+            }
+          }
+        } else {
+          if (next.isDefined) {
+            val nextIndex = next.get.firstSeqIndex
+            val nextDirect = next.get.direct
+            if (curIndex < nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //up
+              val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+              val newInfoSplit = newInfo._2.split(",")
+              val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+              map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+              tempDirect.update(elem.route, "down")
+            } else if (curIndex > nextIndex && curDirect.equals("up") && nextDirect.equals("up")) {
+              //down
+              map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+              tempDirect.update(elem.route, "up")
+            } else if (curIndex == nextIndex || curDirect.equals("down")) {
+              val curDisL = elem.ld
+              val nextDisL = elem.ld
+              if (curDisL < nextDisL && curDirect.equals("up")) {
+                val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                val newInfoSplit = newInfo._2.split(",")
+                val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                tempDirect.update(elem.route, "down")
+              } else if (curDisL > nextDisL && curDirect.equals("up")) {
+                map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                tempDirect.update(elem.route, "up")
+              } else {
+                val op = tempDirect.get(elem.route)
+                if (op.isEmpty) {
+                  val max = checkpointMap.getOrElse(elem.route + "," + elem.direct, Array()).maxBy(_.order).order
+                  val cur = curIndex.toFloat / max
+                  if (cur > 0.7f) {
+                    map += ((elem.route + ",up", map.getOrElse(elem.route + ",up", Array()) ++ Array(bl)))
+                    tempDirect.update(elem.route, "up")
+                  } else {
+                    val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                    val newInfoSplit = newInfo._2.split(",")
+                    val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                    map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                    tempDirect.update(elem.route, "down")
+                  }
+                } else if (op.get.equals("up") && !curDirect.equals("down")) {
+                  map += ((elem.route + "," + op.get, map.getOrElse(elem.route + "," + op.get, Array()) ++ Array(bl)))
+                  tempDirect.update(elem.route, "up")
+                } else if (op.get.equals("down")) {
+                  val newInfo = filterInLineGps(curLon, curLat, checkpointMap.getOrElse(elem.route + ",down", Array()).sortBy(_.order))
+                  val newInfoSplit = newInfo._2.split(",")
+                  val newBL = bl.copy(indexLeft = newInfoSplit(0).toInt, disL = newInfoSplit(1).toDouble, indexRight = newInfoSplit(2).toInt, disR = newInfoSplit(3).toDouble)
+                  map += ((elem.route + ",down", map.getOrElse(elem.route + ",down", Array()) ++ Array(newBL)))
+                  tempDirect.update(elem.route, "down")
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    val result = new ArrayBuffer[BusArrivalHBase2]()
+    //切分与抛弃
+    val useIndex = new ArrayBuffer[(Int, Int)]()
+    map.foreach(tuple => {
+      val list = tuple._2.filter(bl => useIndex.forall(t => t._1 > bl.index || t._2 < bl.index)).sortBy(bl => bl.index)
+      var index = 0 //切分索引
+      val split = tuple._1.split(",")
+      val curDirect = split(1)
+      val curLine = split(0)
+      val checkDirect = checkpointDirect.find(t => t._1.equals(curLine)).get
+
+      val sm = stationMap.getOrElse(tuple._1, Array()).sortBy(_.stationSeqId)
+      val cm = checkpointMap.getOrElse(tuple._1, Array()).sortBy(_.order)
+      if ((curDirect.equals("up") && checkDirect._2.equals("up")) || (curDirect.equals("down") && checkDirect._3.equals("down"))) {
+        val station = stationJoinLineCheckpointId(sm, cm)
+        for (i <- 0 until list.length - 1) {
+          val first = list(i).indexLeft
+          val next = list(i + 1).indexLeft
+          val time = DateUtil.dealTime(list(i).gpsTime, list(i + 1).gpsTime, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+
+          if (next < first && time > 900) {
+            //趟次切分与验证
+            val confirm = tripConfirm(list.slice(index, i + 1), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+            index = i + 1
+          }
+          //最后一趟识别
+          if (i == list.length - 2 && index < i) {
+            //趟次切分与验证
+            val confirm = tripConfirm(list.slice(index, list.length), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+          }
+        }
+      } else {
+        val station = stationJoinLineCheckpointIdDiff(sm, cm)
+        for (i <- 0 until list.length - 1) {
+          val first = list(i).indexLeft
+          val next = list(i + 1).indexLeft
+          val time = DateUtil.dealTime(list(i).gpsTime, list(i + 1).gpsTime, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+          if (next > first && time > 900) {
+            //趟次切分与验证
+            val confirm = tripConfirmDiff(list.slice(index, i + 1), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+            index = i + 1
+          }
+          //最后一趟识别
+          if (i == list.length - 2 && index < i) {
+            //趟次切分与验证
+            val confirm = tripConfirmDiff(list.slice(index, list.length), station)
+            if (confirm._1) {
+              useIndex += ((list(index).indexLeft, first))
+              result ++= confirm._2
+            }
+          }
+        }
+      }
+    })
+
+    result.toArray
+  }
+
+  /**
+    * 趟次切分与验证
+    *
+    * @param bl      BusLocation
+    * @param station StationData
+    * @return
+    */
+  def tripConfirm(bl: Array[BusLocation], station: (Double, Array[StationData])): (Boolean, Array[BusArrivalHBase2]) = {
+    val tripId = UUID.randomUUID().toString.replaceAll("-", "")
+    val last = station._2.sortBy(sd => sd.stationSeqId)
+    val busArrivalHBase = new ArrayBuffer[BusArrivalHBase2]()
+    for (i <- last.indices) {
+      val sd = last(i)
+      var arrivalTime = "null"
+      var leaveTime = "null"
+      val format = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+      val maybe = bl.filter { b => b.indexLeft >= sd.checkpointInd - 2 && b.indexLeft <= sd.checkpointInd + 1 }
+      if (!maybe.isEmpty) {
+        //存在区间且有距离50m内的点
+        val has_50 = maybe.filter { b => LocationUtil.distance(b.lon, b.lat, sd.stationLon, sd.stationLat) <= 50.0 }
+        if (has_50.isEmpty) {
+          //没有50m的点，找两个离站点最近的两个gps，如果距离缩小，减速运动，+时间
+          //距离变大，加速运动，-时间
+          val minOne = maybe.map(b => (LocationUtil.distance(b.lon, b.lat, sd.stationLon, sd.stationLat), b)).minBy(_._1)._2
+          val disU = LocationUtil.distance(minOne.lon, minOne.lat, sd.stationLon, sd.stationLat)
+          val minDis = math.min(math.min(minOne.disL, minOne.disR), disU)
+          val c1 = disU / minOne.speed
+          val cost = if (c1 > minOne.costTime) minOne.costTime / 2 else c1
+          if (minDis == minOne.disL || (minDis == disU && minOne.disL <= minOne.disR)) {
+            //gps点位于站点的左边
+            arrivalTime = DateUtil.timePlus(minOne.gpsTime, cost.toInt, format)
+            leaveTime = DateUtil.timePlus(arrivalTime, 2, format) //默认停2s
+          } else {
+            //gps点位于站点的右边
+            arrivalTime = DateUtil.timePlus(minOne.gpsTime, -cost.toInt, format)
+            leaveTime = DateUtil.timePlus(arrivalTime, 2, format) //默认停2s
+          }
+        } else {
+          //最小点作为进站时间，最大点作为离站时间
+          val minBl = has_50.minBy(_.index)
+          val maxBl = has_50.maxBy(_.index)
+          arrivalTime = minBl.gpsTime
+          leaveTime = if (minBl == maxBl) DateUtil.timePlus(arrivalTime, 2, format) else maxBl.gpsTime
+        }
+      }
+      val prefixStationId = if (i == 0) "null" else last(i - 1).stationId
+      val nextStationId = if (i == last.length - 1) "null" else last(i + 1).stationId
+      busArrivalHBase += BusArrivalHBase2("rowKey", tripId, sd.route, sd.direct, sd.stationSeqId, sd.stationId, arrivalTime, leaveTime, prefixStationId, nextStationId, station._1, last.length)
+    }
+    val result = busArrivalHBase.filter(bah => !bah.arrivalTime.equals("null") && !bah.leaveTime.equals("null"))
+    var temp = false
+    if (result.length.toDouble / last.length >= 0.8) {
+      temp = true
+    }
+    (temp, busArrivalHBase.toArray)
+  }
+
+  /**
+    * 趟次切分与验证
+    *
+    * @param bl      BusLocation
+    * @param station StationData
+    * @return
+    */
+  def tripConfirmDiff(bl: Array[BusLocation], station: (Double, Array[StationData])): (Boolean, Array[BusArrivalHBase2]) = {
+    val tripId = UUID.randomUUID().toString.replaceAll("-", "")
+    val last = station._2.sortBy(sd => sd.stationSeqId)
+    val busArrivalHBase = new ArrayBuffer[BusArrivalHBase2]()
+    for (i <- last.indices) {
+      val sd = last(i)
+      var arrivalTime = "null"
+      var leaveTime = "null"
+      val format = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+      val maybe = bl.filter { b => b.indexRight >= sd.checkpointInd - 2 && b.indexRight <= sd.checkpointInd + 2 }
+      if (!maybe.isEmpty) {
+        //存在区间且有距离50m内的点
+        val has_50 = maybe.filter { b => LocationUtil.distance(b.lon, b.lat, sd.stationLon, sd.stationLat) <= 50.0 }
+        if (has_50.isEmpty) {
+          //没有50m的点，找两个离站点最近的两个gps，如果距离缩小，减速运动，+时间
+          //距离变大，加速运动，-时间
+          val minOne = maybe.map(b => (LocationUtil.distance(b.lon, b.lat, sd.stationLon, sd.stationLat), b)).minBy(_._1)._2
+          val disU = LocationUtil.distance(minOne.lon, minOne.lat, sd.stationLon, sd.stationLat)
+          val minDis = math.min(math.min(minOne.disL, minOne.disR), disU)
+          val c1 = disU / minOne.speed
+          val cost = if (c1 > minOne.costTime) minOne.costTime / 2 else c1
+          if (minDis == minOne.disL || (minDis == disU && minOne.disL <= minOne.disR)) {
+            //gps点位于站点的左边
+            arrivalTime = DateUtil.timePlus(minOne.gpsTime, cost.toInt, format)
+            leaveTime = DateUtil.timePlus(arrivalTime, 2, format) //默认停2s
+          } else {
+            //gps点位于站点的右边
+            arrivalTime = DateUtil.timePlus(minOne.gpsTime, -cost.toInt, format)
+            leaveTime = DateUtil.timePlus(arrivalTime, 2, format) //默认停2s
+          }
+        } else {
+          //最小点作为进站时间，最大点作为离站时间
+          val minBl = has_50.minBy(_.index)
+          val maxBl = has_50.maxBy(_.index)
+          arrivalTime = minBl.gpsTime
+          leaveTime = if (minBl == maxBl) DateUtil.timePlus(arrivalTime, 2, format) else maxBl.gpsTime
+        }
+      }
+      val prefixStationId = if (i == 0) "null" else last(i - 1).stationId
+      val nextStationId = if (i == last.length - 1) "null" else last(i + 1).stationId
+      busArrivalHBase += BusArrivalHBase2("rowKey", tripId, sd.route, sd.direct, sd.stationSeqId, sd.stationId, arrivalTime, leaveTime, prefixStationId, nextStationId, station._1, last.length)
+    }
+
+    val result = busArrivalHBase.filter(bah => !bah.arrivalTime.equals("null") && !bah.leaveTime.equals("null"))
+    var temp = false
+    if (result.length.toDouble / last.length >= 0.8) {
+      temp = true
+    }
+    (temp, busArrivalHBase.toArray)
+  }
+
+  /**
+    * 匹配命中线路的gps点
+    *
+    * @param lineCheckPoint lineCheckpoint
+    * @param lon            经度
+    * @param lat            纬度
+    * @return
+    */
+  def filterInLineGps(lon: Double, lat: Double, lineCheckPoint: Array[LineCheckPoint]): (Double, String, Double) = {
+    var index = -1
+    var left = 0.0
+    var right = 0.0
+    var indexRight = -1
+    var minDis = Double.MaxValue
+    var p = 0.0
+    var temp = -1
+    var dis0 = Double.MaxValue
+    var dis1 = Double.MaxValue
+    if (!lineCheckPoint.isEmpty) {
+      dis0 = LocationUtil.distance(lon, lat, lineCheckPoint(0).lon, lineCheckPoint(0).lat)
+      dis1 = LocationUtil.distance(lon, lat, lineCheckPoint(lineCheckPoint.length - 1).lon, lineCheckPoint(lineCheckPoint.length - 1).lat)
+    }
+    if (dis0 < 200.0) {
+      temp = 0
+    } else if (dis1 < 200.0) {
+      temp = lineCheckPoint.length
+    }
+
+    for (i <- 0 until lineCheckPoint.length - 1) {
+      val p1 = lineCheckPoint(i)
+      val p2 = lineCheckPoint(i + 1)
+      val disL = LocationUtil.distance(lon, lat, p1.lon, p1.lat)
+      val disR = LocationUtil.distance(lon, lat, p2.lon, p2.lat)
+      val disP = LocationUtil.distance(p1.lon, p1.lat, p2.lon, p2.lat)
+
+      val diff = disL + disR - disP
+
+      if (diff < minDis) {
+        index = p1.order
+        indexRight = p2.order
+        left = disL
+        right = disR
+        minDis = diff
+        p = disP
+      }
+    }
+
+    p = if (temp == 0 || temp == lineCheckPoint.length) 0.2 else p
+    minDis = if (temp == 0 || temp == lineCheckPoint.length) 0.1 else minDis
+    (p, index + "," + left + "," + indexRight + "," + right, minDis)
+  }
+
+  /**
+    * 为stationData添加距离站点最近的checkpoint点位置
+    *
+    * @param stationData Array[StationData]
+    * @param checkpoint  Array[LineCheckPoint]
+    * @return
+    */
+  def stationJoinLineCheckpointId(stationData: Array[StationData], checkpoint: Array[LineCheckPoint]): (Double, Array[StationData]) = {
+    var mile = 0.0
+    val station = stationData.map(sd => {
+      var minCheckpointInd = 0
+      var minDiff = Double.MaxValue
+      mile = 0.0
+      for (i <- 0 until checkpoint.length - 1) {
+        val p1 = checkpoint(i)
+        val p2 = checkpoint(i + 1)
+        val disL = LocationUtil.distance(sd.stationLon, sd.stationLat, p1.lon, p1.lat)
+        val disR = LocationUtil.distance(sd.stationLon, sd.stationLat, p2.lon, p2.lat)
+        val disP = LocationUtil.distance(p1.lon, p1.lat, p2.lon, p2.lat)
+        val diff = disL + disR - disP
+        if (minDiff > diff) {
+          minDiff = diff
+          minCheckpointInd = p1.order
+        }
+        mile += disP
+      }
+      sd.copy(checkpointInd = minCheckpointInd)
+    })
+    (mile, station)
+  }
+
+  /**
+    * 为stationData添加距离站点最近的checkpoint点位置
+    *
+    * @param stationData Array[StationData]
+    * @param checkpoint  Array[LineCheckPoint]
+    * @return
+    */
+  def stationJoinLineCheckpointIdDiff(stationData: Array[StationData], checkpoint: Array[LineCheckPoint]): (Double, Array[StationData]) = {
+    var mile = 0.0
+    val station = stationData.map(sd => {
+      var minCheckpointInd = 0
+      var minDiff = Double.MaxValue
+      mile = 0.0
+      for (i <- 0 until checkpoint.length - 1) {
+        val p1 = checkpoint(i)
+        val p2 = checkpoint(i + 1)
+        val disL = LocationUtil.distance(sd.stationLon, sd.stationLat, p1.lon, p1.lat)
+        val disR = LocationUtil.distance(sd.stationLon, sd.stationLat, p2.lon, p2.lat)
+        val disP = LocationUtil.distance(p1.lon, p1.lat, p2.lon, p2.lat)
+        val diff = disL + disR - disP
+        if (minDiff > diff) {
+          minDiff = diff
+          minCheckpointInd = p2.order
+        }
+        mile += disP
+      }
+      sd.copy(checkpointInd = minCheckpointInd)
+    })
+    (mile, station)
   }
 
   /**
@@ -488,10 +1379,12 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
     * @return
     */
   private def toBusArrivalData(routeConfirm: Array[String], stationMap: Map[String, Array[StationData]]): Array[BusArrivalHBase] = {
+    //groupBy 趟次
     routeConfirm.groupBy { s =>
       val split = s.split(",")
       split(split.length - 1)
     }.flatMap { s =>
+      //按时间排序
       val list = s._2.sortBy(s => s.split(",")(11))
       //挑选最相似的方向作为主方向
       val up = stationMap.getOrElse(list(0).split(",")(16) + ",up", Array())
@@ -508,24 +1401,29 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
       if (direct_up > direct_down)
         direct = "down"
 
+      //挑选到站点
       val result = new ArrayBuffer[BusArrivalHBase]()
       val tripId = UUID.randomUUID().toString.replaceAll("-", "")
       var index = 0
       var firstOne: BusArrivalHBase = null
       var count = 0
+      var trip_mile = 0.0
+      val firstLonLat = Array(0.0, 0.0)
+      val carId = list(0).split(",")(3).replace("��", "粤")
+      val sdArr = if (direct.equals("up")) up else down
       list.foreach { line =>
         val split = line.split(",")
         val lineId = split(4)
-        val carId = split(3).replace("��", "粤")
-        val sdArr = if (direct.equals("up")) up else down
         val time = split(11)
         var max = Double.MaxValue
         var stationInd = 0
         var stationId = ""
         var prefixStationId = "null"
         var nextStationId = "null"
+        val lon = split(8).toDouble
+        val lat = split(9).toDouble
         for (i <- sdArr.indices) {
-          val dis = LocationUtil.distance(sdArr(i).stationLon, sdArr(i).stationLat, split(8).toDouble, split(9).toDouble)
+          val dis = LocationUtil.distance(sdArr(i).stationLon, sdArr(i).stationLat, lon, lat)
           if (max > dis) {
             max = dis
             prefixStationId = if (i > 0) sdArr(i - 1).stationId else "null"
@@ -549,6 +1447,29 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
             time, time, prefixStationId, nextStationId)
           index = stationInd
           count = 0
+        }
+        //计算里程
+        if (firstLonLat.forall(_ > 0.0)) {
+          trip_mile += LocationUtil.distance(firstLonLat(0), firstLonLat(1), lon, lat)
+        }
+        firstLonLat(0) = lon
+        firstLonLat(1) = lat
+      }
+
+      if (result.nonEmpty && result.length.toFloat / sdArr.length.toFloat > 0.5) {
+        val sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        val startStation = result(0)
+        val endStation = result(result.length - 1)
+        val currentDate = new Timestamp(System.currentTimeMillis())
+        val trip_timecost = DateUtil.dealTime(startStation.arrivalTime, endStation.arrivalTime, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        val writeSQLList = BusArrivalMySQL200(tripId, currentDate, currentDate, carId, direct, endStation.stationId, endStation.stationIndex.toInt, new Timestamp(sdf.parse(endStation.arrivalTime).getTime)
+          , new Timestamp(sdf.parse(endStation.arrivalTime).getTime), new Timestamp(sdf.parse(startStation.arrivalTime).getTime), startStation.lineId, "miss", s"${result.length}/${sdArr.length}", new Timestamp(sdf.parse(startStation.arrivalTime).getTime)
+          , startStation.stationId, startStation.stationIndex.toInt, new Timestamp(sdf.parse(startStation.arrivalTime).getTime), trip_timecost.toInt, s"${result.length}/${sdArr.length}", trip_mile.toString, tripId)
+        //val listSQL = Array(writeSQLList)
+        //DAOUtil.writeToDataBase("jdbc:mysql://192.168.40.27:3306/xbus?user=test&password=test", "bus_roundtrip", listSQL.iterator, writeSQLList)
+        if (result.length > sdArr.length) {
+          result.foreach(println)
+          sdArr.foreach(println)
         }
       }
       result
@@ -658,7 +1579,7 @@ class RoadInformation(busDataCleanUtils: BusDataCleanUtils) extends Serializable
         val station = bMapStation.value.getOrElse(mapKey, Array()).map(sd => Point(sd.stationLon, sd.stationLat))
         var index = 0
         it.foreach { data =>
-          val point = new Point(data.getDouble(data.fieldIndex("lon")), data.getDouble(data.fieldIndex("lat")))
+          val point = Point(data.getDouble(data.fieldIndex("lon")), data.getDouble(data.fieldIndex("lat")))
           arr.+=(point)
           val dis = FrechetUtils.compareGesture1(arr.toArray, station)
           result += TripVisualization(index, data.getInt(data.fieldIndex("tripId")), dis)

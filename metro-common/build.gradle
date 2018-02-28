@@ -27,17 +27,17 @@ task "createDirs" << {
     sourceSets*.resources.srcDirs*.each { it.mkdirs() }
 }
 
-repositories {
-    maven {
-        url 'http://download.osgeo.org/webdav/geotools/'
-    }
-    maven {
-        url 'http://download.java.net/maven/2'
-    }
-    maven {
-        url 'http://repo.opengeo.org'
-    }
-}
+//repositories {
+//    maven {
+//        url 'http://download.osgeo.org/webdav/geotools/'
+//    }
+//    maven {
+//        url 'http://download.java.net/maven/2'
+//    }
+//    maven {
+//        url 'http://repo.opengeo.org'
+//    }
+//}
 
 dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.11'

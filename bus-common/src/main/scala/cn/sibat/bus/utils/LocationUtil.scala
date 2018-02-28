@@ -1,5 +1,7 @@
 package cn.sibat.bus.utils
 
+import cn.sibat.bus.Point
+
 /**
   * Created by kong on 2017/7/12.
   */
@@ -12,6 +14,7 @@ object LocationUtil {
     * 采用asin的计算方式
     * 计算条数>1000条以后效率优于atan2的方式
     * 而且稳定,两者的距离误差在0.00000001
+    *
     * @param lon1 经度1
     * @param lat1 纬度1
     * @param lon2 经度2
@@ -31,6 +34,7 @@ object LocationUtil {
     * 两经纬度的距离
     * 采用atan2的计算方式
     * 效率低，不稳定波动大
+    *
     * @param lon1 经度1
     * @param lat1 纬度1
     * @param lon2 经度2
@@ -125,5 +129,41 @@ object LocationUtil {
     ret += (20.0 * math.sin(x * math.Pi) + 40.0 * math.sin(x / 3.0 * math.Pi)) * 2.0 / 3.0
     ret += (150.0 * math.sin(x / 12.0 * math.Pi) + 300.0 * math.sin(x / 30.0 * math.Pi)) * 2.0 / 3.0
     ret
+  }
+
+  /**
+    * 计算三点所成夹角的cos值
+    * 所求角为∠AMB
+    *
+    * @param A 点A
+    * @param M 点M
+    * @param B 点B
+    * @return
+    */
+  def cosAngle(A: Point, M: Point, B: Point): Double = {
+    cosAngle(A.lon, A.lat, M.lon, M.lat, B.lon, B.lat)
+  }
+
+  /**
+    * 计算三点所成夹角的cos值
+    * 所求角为∠AMB
+    *
+    * @param A_lon 点A的经度
+    * @param A_lat 点A的纬度
+    * @param M_lon 点M的经度
+    * @param M_lat 点M的纬度
+    * @param B_lon 点B的经度
+    * @param B_lat 点B的纬度
+    * @return
+    */
+  def cosAngle(A_lon: Double, A_lat: Double, M_lon: Double, M_lat: Double, B_lon: Double, B_lat: Double): Double = {
+    val ma_x = A_lon - M_lon
+    val ma_y = A_lat - M_lat
+    val mb_x = B_lon - M_lon
+    val mb_y = B_lat - M_lat
+    val v1 = (ma_x * mb_x) + (ma_y * mb_y)
+    val ma_val = Math.sqrt(ma_x * ma_x + ma_y * ma_y)
+    val mb_val = Math.sqrt(mb_x * mb_x + mb_y * mb_y)
+    v1 / (ma_val * mb_val)
   }
 }

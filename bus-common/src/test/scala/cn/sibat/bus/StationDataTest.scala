@@ -26,7 +26,7 @@ object StationDataTest {
     val station = spark.read.textFile("D:/testData/公交处/lineInfo.csv").map { str =>
       val Array(route, direct, stationId, stationName, stationSeqId, stationLat, stationLon) = str.split(",")
       val Array(lat,lon) = LocationUtil.gcj02_To_84(stationLat.toDouble,stationLon.toDouble).split(",")
-      new StationData(route, direct, stationId, stationName, stationSeqId.toInt, lon.toDouble, lat.toDouble)
+      StationData(route,"74", direct, stationId, stationName, stationSeqId.toInt, lon.toDouble, lat.toDouble,0)
     }.collect()
     //val bStation = spark.sparkContext.broadcast(station)
 
